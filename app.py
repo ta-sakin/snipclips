@@ -12,22 +12,28 @@ from werkzeug.utils import secure_filename
 import tempfile
 import uuid
 from flask_cors import CORS
+from dotenv import load_dotenv
 
+# Load .env file
+load_dotenv()
 app = Flask(__name__)
 CORS(app)
 # Configuration
 ALLOWED_AUDIO_EXTENSIONS = {'wav', 'mp3'}
 ALLOWED_VIDEO_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv'}
-S3_BUCKET = 'your-bucket-name'
-HF_TOKEN = 'your-huggingface-token'
+S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
+AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY")
+AWS_SECRET_KEY = os.getenv("AWS_SECRET_KEY")
+AWS_REGION = os.getenv("AWS_REGION")
+HF_TOKEN = os.getenv("HF_TOKEN")
 MAX_CONTENT_LENGTH = 500 * 1024 * 1024  # 500MB max file size
 
 # Initialize S3 client
 s3_client = boto3.client(
     's3',
-    aws_access_key_id='your-access-key',
-    aws_secret_access_key='your-secret-key',
-    region_name='your-region'
+    aws_access_key_id=AWS_ACCESS_KEY,
+    aws_secret_access_key=AWS_SECRET_KEY,
+    region_name=S3_BUCKET_NAME
 )
 
 
@@ -176,6 +182,11 @@ def validate_inputs(request):
         'video_file': video_file,
         'reference_audio': reference_audio
     }, None
+
+
+@app.route('/', methods=['GET'])
+def hello():
+    return jsonify({"message": "Hello"})
 
 
 @app.route('/process_video', methods=['POST'])
