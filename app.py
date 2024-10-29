@@ -189,6 +189,11 @@ def hello():
     return jsonify({"message": "Hello"})
 
 
+@app.route('/ping', methods=['GET'])
+def ping():
+    return jsonify({"message": "Pong!"})
+
+
 @app.route('/process_video', methods=['POST'])
 def process_video():
     try:
@@ -253,7 +258,7 @@ def process_video():
             # Upload to S3
             s3_url = upload_to_s3(
                 output_video,
-                S3_BUCKET,
+                S3_BUCKET_NAME,
                 f'processed_videos/{os.path.basename(output_video)}'
             )
 
