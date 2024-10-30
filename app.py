@@ -60,17 +60,40 @@ def upload_to_s3(file_path, bucket, object_name=None):
 
 
 def download_youtube_video(youtube_link, output_path):
+    # Extract base filename without extension
     output_base = os.path.splitext(output_path)[0]
 
-    ydl_opts = {
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4',
-        'outtmpl': output_base + '.mp4',
-    }
+    # Define the yt-dlp command with the necessary options
+    command = [
+        'yt-dlp',
+        '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4',
+        youtube_link,
+        '--username', 'oauth2',
+        '--password', '',
+        '--output', f'{output_base}.mp4'
+    ]
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([youtube_link])
-    actual_output = output_base + '.mp4'
-    return actual_output
+    # Execute the command
+    try:
+        result = subprocess.run(command, check=True,
+                                capture_output=True, text=True)
+        print("Download successful:", result.stdout)
+        return f"{output_base}.mp4"  # Path to the downloaded video
+    except subprocess.CalledProcessError as e:
+        print("An error occurred:", e.stderr)
+        return None
+# def download_youtube_video(youtube_link, output_path):
+#     output_base = os.path.splitext(output_path)[0]
+
+#     ydl_opts = {
+#         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4',
+#         'outtmpl': output_base + '.mp4',
+#     }
+
+#     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+#         ydl.download([youtube_link])
+#     actual_output = output_base + '.mp4'
+#     return actual_output
 
 
 def extract_audio_from_video(video_path, audio_path):
