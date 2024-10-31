@@ -33,7 +33,7 @@ s3_client = boto3.client(
     's3',
     aws_access_key_id=AWS_ACCESS_KEY,
     aws_secret_access_key=AWS_SECRET_KEY,
-    region_name=S3_BUCKET_NAME
+    region_name=AWS_REGION
 )
 
 
@@ -79,6 +79,7 @@ def download_youtube_video(youtube_link, output_path):
                                 capture_output=True, text=True)
         print("Download successful:", result.stdout)
         return f"{output_base}.mp4"  # Path to the downloaded video
+    
     except subprocess.CalledProcessError as e:
         print("An error occurred:", e.stderr)
         return None
