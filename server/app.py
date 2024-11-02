@@ -278,7 +278,7 @@ def process_video():
                 matching_speakers,
                 output_video
             )
-
+            print("uploading to s3 "+f'processed_videos/{os.path.basename(output_video)}')
             # Upload to S3
             s3_url = upload_to_s3(
                 output_video,
