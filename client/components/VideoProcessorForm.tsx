@@ -1,204 +1,3 @@
-// 'use client'
-
-// import '@vidstack/react/player/styles/base.css';
-// import { useState, useRef } from 'react'
-// import { Button } from "@/components/ui/button"
-// import { Input } from "@/components/ui/input"
-// import { Label } from "@/components/ui/label"
-// import { Textarea } from "@/components/ui/textarea"
-// import { AudioRecorder } from 'react-audio-voice-recorder';
-// import { X } from 'lucide-react'
-// import { MediaPlayer, MediaProvider } from '@vidstack/react';
-// import { Player } from './video/player';
-// // Base styles for media player and provider (~400B).
-// export default function VideoProcessorForm() {
-//   const [youtubeUrl, setYoutubeUrl] = useState('')
-//   const [videoFile, setVideoFile] = useState<File | null>(null)
-//   const [referenceAudio, setReferenceAudio] = useState<File | null>(null)
-//   const [recordedAudio, setRecordedAudio] = useState<{blob:Blob,url:string} | null>(null)
-//   const [isRecording, setIsRecording] = useState(false)
-//   const [result, setResult] = useState<any>(null)
-//   const [error, setError] = useState<string | null>(null)
-//   const [isLoading, setIsLoading] = useState(false)
-
-//   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
-//   const audioChunksRef = useRef<Blob[]>([])
-
-//   // const startRecording = async () => {
-//   //   try {
-//   //     const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-//   //     mediaRecorderRef.current = new MediaRecorder(stream)
-//   //     mediaRecorderRef.current.ondataavailable = (event) => {
-//   //       if (event.data.size > 0) {
-//   //         audioChunksRef.current.push(event.data)
-//   //       }
-//   //     }
-//   //     mediaRecorderRef.current.onstop = () => {
-//   //       const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' })
-//   //       setRecordedAudio(audioBlob)
-//   //       audioChunksRef.current = []
-//   //     }
-//   //     mediaRecorderRef.current.start()
-//   //     setIsRecording(true)
-//   //   } catch (error) {
-//   //     console.error('Error accessing microphone:', error)
-//   //   }
-//   // }
-
-//   const stopRecording = () => {
-//     if (mediaRecorderRef.current && isRecording) {
-//       mediaRecorderRef.current.stop()
-//       setIsRecording(false)
-//     }
-//   }
-
-//   const handleSubmit = async (e: React.FormEvent) => {
-//     e.preventDefault()
-//     setIsLoading(true)
-//     setError(null)
-//     setResult(null)
-
-//     const formData = new FormData()
-//     if (youtubeUrl) formData.append('youtube_url', youtubeUrl)
-//     if (videoFile) formData.append('video_file', videoFile)
-//     if (referenceAudio) formData.append('reference_audio', referenceAudio)
-//     if (recordedAudio) formData.append('reference_audio', recordedAudio.blob, 'recorded_audio.wav')
-
-//     try {
-//       const response = await fetch('https://fearful-skeleton-64wvpw6qv5jf5w7j-5000.app.github.dev/process_video', {
-//         method: 'POST',
-//         body: formData,
-//       })
-
-//       if (!response.ok) {
-//         throw new Error(`HTTP error! status: ${response.status}`)
-//       }
-
-//       const data = await response.json()
-//       setResult(data)
-//     } catch (e) {
-//       setError(e instanceof Error ? e.message : 'An unknown error occurred')
-//     } finally {
-//       setIsLoading(false)
-//     }
-//   }
-
-//   const addAudioElement = (blob:Blob) => {
-//     const url = URL.createObjectURL(blob);
-//     setRecordedAudio({blob,url})
-//     // const existingAudio = document.querySelector("audio");
-
-//     // // If there's an existing audio element, remove it
-//     // if (existingAudio) {
-//     //   existingAudio.remove();
-//     // }
-
-//     // const audio = document.createElement("audio");
-//     // audio.src = url;
-//     // audio.controls = true;
-//     // audio.classList.add("mt-4", "border-2", "border-blue-500", "rounded-lg", "shadow-lg");
-
-//     // document.body.appendChild(audio);
-//   };
-//   console.log({recordedAudio})
-
-//   return (
-//     <form onSubmit={handleSubmit} className="space-y-4">
-//       <div>
-//         <Label htmlFor="youtube_url">YouTube URL</Label>
-//         <Input
-//           id="youtube_url"
-//           type="text"
-//           value={youtubeUrl}
-//           onChange={(e) => setYoutubeUrl(e.target.value)}
-//           placeholder="https://www.youtube.com/watch?v=..."
-//         />
-//       </div>
-//       <div>
-//         <Label htmlFor="video_file">Or upload a video file</Label>
-//         <Input
-//           id="video_file"
-//           type="file"
-//           onChange={(e) => setVideoFile(e.target.files?.[0] || null)}
-//           accept=".mp4,.avi,.mov,.mkv"
-//         />
-//       </div>
-//       <div>
-//         <Label htmlFor="reference_audio">Reference Audio (upload or record)</Label>
-//         <Input
-//           id="reference_audio"
-//           type="file"
-//           onChange={(e) => {
-//             setReferenceAudio(e.target.files?.[0] || null)
-//             setRecordedAudio(null)
-//           }}
-
-//           accept=".wav,.mp3"
-//           disabled={isRecording || !!recordedAudio}
-//         />
-//       </div>
-//     <div className="flex items-center space-x-4">
-//     <AudioRecorder
-//     onRecordingComplete={addAudioElement}
-//     audioTrackConstraints={{
-//       noiseSuppression: true,
-//       echoCancellation: true,
-//     }}
-//     showVisualizer={true}
-//     downloadOnSavePress={false}
-//     downloadFileExtension="mp3"
-//   />
-//  {recordedAudio&& <div className='flex items-center justify-center gap-2'>
-//   <audio
-//               src={recordedAudio.url}
-//               controls={true}
-//               className="w-72"
-//               // style={{ aspectRatio: '16/9' }}
-//             >
-//               Your browser does not support the audio tag.
-//             </audio>
-//             <Button size={'icon'} variant={'outline'} onClick={()=>setRecordedAudio(null)}><X className="h-6 w-6"/></Button>
-//   </div>}
-//       {/* <Button
-//         type="button"
-//         onClick={isRecording ? stopRecording : startRecording}
-//         disabled={!!referenceAudio}
-//       >
-//         {isRecording ? 'Stop Recording' : 'Start Recording'}
-//       </Button> */}
-//       {/* {recordedAudio && <span className="text-green-500">Audio recorded!</span>} */}
-//     </div>
-//       <Button type="submit" disabled={isLoading}>
-//         {isLoading ? 'Processing...' : 'Process Video'}
-//       </Button>
-//       <Player videoSrc={"https://krmu-app.s3.amazonaws.com/processed_videos/output_492771d6-406b-4d70-9218-4b1d5ad83a2d.mp4"} />
-//       {/* <MediaPlayer className="w-full aspect-video bg-slate-900 text-white font-sans overflow-hidden rounded-md ring-media-focus data-[focus]:ring-4" title="Sprite Fight" src="https://files.vidstack.io/sprite-fight/720p.mp4">
-//         <MediaProvider />
-//       </MediaPlayer> */}
-//       {error && <p className="text-red-500">{error}</p>}
-//       {result && (
-//         <div>
-//           <h2 className="text-xl font-bold">Result:</h2>
-//           <Textarea value={JSON.stringify(result, null, 2)} readOnly rows={10} />
-//           {result.video_url && (
-//             <div className="mt-4">
-//               <h3 className="text-lg font-bold mb-2">Processed Video:</h3>
-//               <video
-//                 src={result.video_url}
-//                 controls
-//                 className="w-full"
-//                 style={{ aspectRatio: '16/9' }}
-//               >
-//                 Your browser does not support the video tag.
-//               </video>
-//             </div>
-//           )}
-//         </div>
-//       )}
-//     </form>
-//   )
-// }
-
 "use client";
 import "@vidstack/react/player/styles/base.css";
 import { AudioRecorder } from "react-audio-voice-recorder";
@@ -319,7 +118,10 @@ export default function VideoProcessor() {
     if (youtubeUrl) {
       setVideoSrc(youtubeUrl);
     } else if (videoFile) {
-      setVideoSrc(URL.createObjectURL(videoFile));
+      const url = URL.createObjectURL(videoFile);
+      setVideoSrc(url);
+      // Cleanup the URL when the component unmounts or when the video changes
+      return () => URL.revokeObjectURL(url);
     } else {
       setVideoSrc(null);
     }
@@ -370,7 +172,6 @@ export default function VideoProcessor() {
     }
   };
 
-  console.log(result.video_url);
   return (
     <>
       <div className="container mx-auto p-4">
@@ -570,13 +371,13 @@ export default function VideoProcessor() {
             {result && (
               <Card className="mt-4">
                 <CardHeader>
-                  <CardTitle>Results</CardTitle>
+                  <CardTitle>Processed Video</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <p>Status: {result.status}</p>
+                  {/* <p>Status: {result.status}</p> */}
                   {result.video_url && (
-                    <div className="mt-4">
-                      <p>Processed Video:</p>
+                    <div className="">
+                      {/* <p className="font-semibold text-lg">Processed Video</p> */}
                       <Player videoSrc={result.video_url} />
                     </div>
                   )}

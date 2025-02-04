@@ -1,6 +1,6 @@
-import '@vidstack/react/player/styles/base.css';
+import "@vidstack/react/player/styles/base.css";
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef } from "react";
 
 import {
   isHLSProvider,
@@ -13,18 +13,18 @@ import {
   type MediaPlayerInstance,
   type MediaProviderAdapter,
   type MediaProviderChangeEvent,
-} from '@vidstack/react';
-import '@vidstack/react/player/styles/default/theme.css';
-import '@vidstack/react/player/styles/default/layouts/audio.css';
-import '@vidstack/react/player/styles/default/layouts/video.css';
+} from "@vidstack/react";
+import "@vidstack/react/player/styles/default/theme.css";
+import "@vidstack/react/player/styles/default/layouts/audio.css";
+import "@vidstack/react/player/styles/default/layouts/video.css";
 
 // import { MediaPlayer, MediaProvider, Poster, Track } from "@vidstack/react"
 import {
   DefaultVideoLayout,
   defaultLayoutIcons,
-} from '@vidstack/react/player/layouts/default';
+} from "@vidstack/react/player/layouts/default";
 
-import { VideoLayout } from './layout/video-layout';
+import { VideoLayout } from "./layout/video-layout";
 
 export function Player({ videoSrc }: { videoSrc: string }) {
   let player = useRef<MediaPlayerInstance>(null);
@@ -79,33 +79,3 @@ export function Player({ videoSrc }: { videoSrc: string }) {
     </MediaPlayer>
   );
 }
-// <MediaPlayer
-//   className="w-full aspect-video bg-slate-900 text-white font-sans overflow-hidden rounded-md ring-media-focus data-[focus]:ring-4"
-//   title="Sprite Fight"
-//   src={videoSrc}
-//   viewType="video"
-//   streamType="on-demand"
-//   logLevel="warn"
-//   // crossOrigin
-//   playsInline
-//   // title='Sprite Fight'
-//   // streamType="on-demand"
-//   // crossOrigin
-//   // playsInline
-//   // onProviderChange={onProviderChange}
-//   // onCanPlay={onCanPlay}
-//   // ref={player}
-// >
-//   <MediaProvider>
-//     {/* <Poster
-//       className="absolute inset-0 block h-full w-full rounded-md opacity-0 transition-opacity data-[visible]:opacity-100 object-cover"
-//       src="https://files.vidstack.io/sprite-fight/poster.webp"
-//       alt="Girl walks into campfire with gnomes surrounding her friend ready for their next meal!"
-//     /> */}
-//     {/* {textTracks.map((track) => (
-//       <Track {...track} key={track.src} />
-//     ))} */}
-//   </MediaProvider>
-
-//   <VideoLayout thumbnails="https://files.vidstack.io/sprite-fight/thumbnails.vtt" />
-// </MediaPlayer>
