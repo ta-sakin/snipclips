@@ -14,7 +14,7 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "SnipClips - Get your clip from the video",
+  title: "VidClips - Get your clip from the video",
   description: "Get your clip from the video",
 };
 

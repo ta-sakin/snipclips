@@ -150,10 +150,13 @@ export default function VideoProcessor() {
         );
       }
 
-      const response = await fetch("http://localhost:5000/process_video", {
-        method: "POST",
-        body: formData,
-      });
+      const response = await fetch(
+        "https://plain-sea-5283.ploomber.app/process_video",
+        {
+          method: "POST",
+          body: formData,
+        }
+      );
 
       if (!response.ok) {
         throw new Error("Failed to process video");
