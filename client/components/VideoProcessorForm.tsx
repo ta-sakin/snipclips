@@ -151,7 +151,7 @@ export default function VideoProcessor() {
       }
 
       const response = await fetch(
-        "https://plain-sea-5283.ploomber.app/process_video",
+        "https://snipclips-ry6v7.kinsta.app/process_video",
         {
           method: "POST",
           body: formData,
