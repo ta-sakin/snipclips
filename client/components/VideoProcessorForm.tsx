@@ -185,7 +185,9 @@ export default function VideoProcessor() {
           <CardContent>
             <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
               <div>
-                <Label htmlFor="youtube-url">YouTube URL</Label>
+                <Label htmlFor="youtube-url" className="flex gap-1 mb-1">
+                  YouTube URL<p className="text-gray-500">(Coming soon)</p>
+                </Label>
                 <div className="flex items-center space-x-2">
                   <Youtube className="h-5 w-5 text-gray-500" />
                   <Controller
@@ -195,6 +197,7 @@ export default function VideoProcessor() {
                       <Input
                         id="youtube-url"
                         type="url"
+                        disabled={true}
                         placeholder="https://www.youtube.com/watch?v=..."
                         {...field}
                         onChange={(e) => {
