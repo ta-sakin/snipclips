@@ -1,6 +1,11 @@
-FROM python:3-alpine AS builder
+FROM python:3.10-slim AS builder
 
 WORKDIR /app
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m venv venv
 ENV VIRTUAL_ENV=/app/venv
@@ -10,7 +15,7 @@ COPY server/requirements.txt .
 RUN pip install -r requirements.txt
 
 # Stage 2
-FROM python:3-alpine AS runner
+FROM python:3.10-slim AS runner
 
 WORKDIR /app
 
