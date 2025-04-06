@@ -3,7 +3,7 @@
 ## Backend setup(for linux)
 
 ```
-cd voxsplit
+cd snipclips
 python3 -m venv .venv
 source .venv/bin/activate
 ```

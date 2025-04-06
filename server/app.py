@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 import os
 import yt_dlp
 from pydub import AudioSegment
@@ -13,11 +13,16 @@ import tempfile
 import uuid
 from flask_cors import CORS
 from dotenv import load_dotenv
+from flask_sse import sse
+
 
 # Load .env file
 load_dotenv()
 app = Flask(__name__)
 CORS(app)
+app.config["REDIS_URL"] = "redis://localhost"
+app.register_blueprint(sse, url_prefix='/stream')
+
 # Configuration
 ALLOWED_AUDIO_EXTENSIONS = {'wav', 'mp3'}
 ALLOWED_VIDEO_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv'}
@@ -79,7 +84,7 @@ def download_youtube_video(youtube_link, output_path):
                                 capture_output=True, text=True)
         print("Download successful:", result.stdout)
         return f"{output_base}.mp4"  # Path to the downloaded video
-    
+
     except subprocess.CalledProcessError as e:
         print("An error occurred:", e.stderr)
         return None
@@ -278,7 +283,8 @@ def process_video():
                 matching_speakers,
                 output_video
             )
-            print("uploading to s3 "+f'processed_videos/{os.path.basename(output_video)}')
+            print("uploading to s3 " +
+                  f'processed_videos/{os.path.basename(output_video)}')
             # Upload to S3
             s3_url = upload_to_s3(
                 output_video,
@@ -295,6 +301,132 @@ def process_video():
                 'matching_speakers': list(matching_speakers),
                 'speaker_distances': distances
             })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+def generate_video_stream(video_path):
+    """Generate video stream in chunks"""
+    chunk_size = 1024 * 1024  # 1MB chunks
+    with open(video_path, 'rb') as video_file:
+        while True:
+            chunk = video_file.read(chunk_size)
+            if not chunk:
+                break
+            yield chunk
+
+
+def calculate_progress(current_step, total_steps):
+    return int((current_step / total_steps) * 100)
+
+
+@app.route('/stream_video', methods=['POST'])
+def stream_video():
+    try:
+        progress_id = str(uuid.uuid4())
+        total_steps = 6  # Total number of processing steps
+        current_step = 0
+
+        def send_progress(message, percentage):
+            sse.publish(
+                {"message": message, "percentage": percentage},
+                type='progress',
+                channel=progress_id
+            )
+
+        # Validate inputs
+        inputs, error = validate_inputs(request)
+        if error:
+            return jsonify({'error': error}), 400
+
+        current_step += 1
+        send_progress("Processing input files...",
+                      calculate_progress(current_step, total_steps))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Setup paths and initial processing
+            video_path = os.path.join(temp_dir, 'video.mp4')
+            audio_path = os.path.join(temp_dir, 'audio.wav')
+            reference_path = os.path.join(
+                temp_dir, secure_filename(inputs['reference_audio'].filename))
+            output_dir = os.path.join(temp_dir, 'extracted_speakers')
+            output_video = os.path.join(temp_dir, f'output_{uuid.uuid4()}.mp4')
+
+            os.makedirs(output_dir, exist_ok=True)
+            inputs['reference_audio'].save(reference_path)
+
+            # Process video
+            current_step += 1
+            send_progress("Processing video...",
+                          calculate_progress(current_step, total_steps))
+
+            if inputs['youtube_url']:
+                video_path = download_youtube_video(
+                    inputs['youtube_url'], video_path)
+                if not video_path:
+                    return jsonify({'error': 'Failed to download YouTube video'}), 500
+            else:
+                video_file = inputs['video_file']
+                video_file_path = os.path.join(
+                    temp_dir, secure_filename(video_file.filename))
+                video_file.save(video_file_path)
+                command = f"ffmpeg -i {video_file_path} -c:v libx264 -c:a aac {video_path} -y"
+                subprocess.call(command, shell=True)
+                os.remove(video_file_path)
+
+            # Extract audio
+            current_step += 1
+            send_progress("Extracting audio...",
+                          calculate_progress(current_step, total_steps))
+            audio_path = extract_audio_from_video(video_path, audio_path)
+
+            # Perform diarization
+            current_step += 1
+            send_progress("Performing speaker diarization...",
+                          calculate_progress(current_step, total_steps))
+            pipeline = Pipeline.from_pretrained(
+                "pyannote/speaker-diarization", use_auth_token=HF_TOKEN)
+            diarization_result = pipeline(audio_path)
+
+            # Match speakers
+            current_step += 1
+            send_progress("Matching speakers...",
+                          calculate_progress(current_step, total_steps))
+            extract_speaker_segments(
+                audio_path, diarization_result, output_dir)
+            matching_speakers, distances = match_speakers(
+                reference_path, output_dir)
+
+            if not matching_speakers:
+                return jsonify({'error': 'No matching speakers found'}), 404
+
+            # Generate final video
+            current_step += 1
+            send_progress("Generating final video...",
+                          calculate_progress(current_step, total_steps))
+            final_video_path = extract_matching_speaker_segments(
+                video_path,
+                diarization_result,
+                matching_speakers,
+                output_video
+            )
+
+            if not final_video_path:
+                return jsonify({'error': 'Failed to generate video'}), 500
+
+            # Return progress ID along with the video stream
+            headers = {
+                'Content-Disposition': 'inline',
+                'Content-Type': 'video/mp4',
+                'X-Progress-ID': progress_id
+            }
+
+            return Response(
+                generate_video_stream(final_video_path),
+                mimetype='video/mp4',
+                headers=headers
+            )
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
