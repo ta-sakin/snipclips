@@ -10,3 +10,5 @@ pydub==0.25.1
 yt-dlp==2024.10.22
 python-dotenv==1.0.1
 Flask-Cors==5.0.0
+flask-sse==1.0.0 
+redis==5.2.1
