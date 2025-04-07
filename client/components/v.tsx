@@ -661,7 +661,7 @@ export default function VideoProcessor() {
               </div>
               {videoSrc && (
                 <div className="mt-4">
-                  <Player videoSrc={videoSrc} />
+                  <Player src={videoSrc} />
                 </div>
               )}
               <div>
@@ -787,7 +787,7 @@ export default function VideoProcessor() {
                 <CardContent>
                   {result.video_url && (
                     <div className="">
-                      <Player videoSrc={result.video_url} />
+                      <Player src={result.video_url} />
                     </div>
                   )}
                 </CardContent>
