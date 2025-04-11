@@ -182,7 +182,7 @@ export default function VideoProcessor() {
         formData.append("reference_audio", blob, "recorded_audio.wav");
       }
 
-      const response = await fetch("/stream_video", {
+      const response = await fetch("http://127.0.0.1:5000/process_video", {
         method: "POST",
         body: formData,
       });
@@ -192,17 +192,21 @@ export default function VideoProcessor() {
       }
 
       const progressId = response.headers.get("X-Progress-ID");
+
       if (progressId) {
         const eventSource = listenToProgress(progressId);
       }
+      const result = await response.json();
+      setResult(result);
 
-      const videoBlob = await response.blob();
-      const videoUrl = URL.createObjectURL(videoBlob);
-      setResult({
-        status: "success",
-        video_url: videoUrl,
-      });
+      // const videoBlob = await response.blob();
+      // const videoUrl = URL.createObjectURL(videoBlob);
+      // setResult({
+      //   status: "success",
+      //   video_url: videoUrl,
+      // });
     } catch (err) {
+      console.log("error ", err);
       if (err instanceof Error) {
         setError(err.message);
       } else {
@@ -381,11 +385,12 @@ export default function VideoProcessor() {
               disabled={
                 !videoSrc ||
                 !(audioSource === "file" ? referenceAudio : recordedAudio) ||
-                isLoading
+                isLoading ||
+                isProcessing
               }
               className="w-full"
             >
-              {isLoading ? "Processing..." : "Process Video"}
+              {isProcessing ? "Processing..." : "Process Video"}
             </Button>
 
             {/* Validation/Error Alerts */}
@@ -413,7 +418,7 @@ export default function VideoProcessor() {
           </form>
 
           {/* Processing Progress */}
-          {isProcessing && (
+          {/* {isProcessing && (
             <div className="mt-6 space-y-1">
               <div className="flex justify-between text-sm text-muted-foreground">
                 <span>{processingMessage}</span>
@@ -426,16 +431,16 @@ export default function VideoProcessor() {
                 />
               </div>
             </div>
-          )}
+          )} */}
 
           {/* Final Output */}
-          {result.video_url && (
+          {result?.video_url && (
             <Card className="mt-6">
               <CardHeader>
                 <CardTitle>Processed Video</CardTitle>
               </CardHeader>
               <CardContent>
-                <Player src={result.video_url} />
+                <Player src={result?.video_url} />
               </CardContent>
             </Card>
           )}
