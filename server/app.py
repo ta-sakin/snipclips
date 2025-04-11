@@ -14,7 +14,11 @@ import uuid
 from flask_cors import CORS
 from dotenv import load_dotenv
 from flask_sse import sse
-
+import os
+import tempfile
+from concurrent.futures import ThreadPoolExecutor
+import time
+from functools import wraps
 
 # Load .env file
 load_dotenv()
@@ -40,6 +44,18 @@ s3_client = boto3.client(
     aws_secret_access_key=AWS_SECRET_KEY,
     region_name=AWS_REGION
 )
+
+
+def timer(func):
+    """Decorator to measure execution time of functions"""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.time()
+        result = func(*args, **kwargs)
+        end = time.time()
+        print(f"{func.__name__} took {end - start:.2f} seconds")
+        return result
+    return wrapper
 
 
 def allowed_audio_file(filename):
@@ -225,6 +241,13 @@ def ping():
 
 @app.route('/process_video', methods=['POST'])
 def process_video():
+    @timer
+    def preprocess_video(input_path, output_path):
+        """Reduce video quality for faster processing"""
+        command = f"ffmpeg -i {input_path} -vf scale=854:480 -c:v libx264 -preset ultrafast -crf 28 -c:a aac -b:a 128k {output_path} -y"
+        subprocess.call(command, shell=True)
+        return output_path
+
     try:
         # Validate inputs
         inputs, error = validate_inputs(request)
@@ -233,8 +256,9 @@ def process_video():
 
         # Create temporary directory for processing
         with tempfile.TemporaryDirectory() as temp_dir:
-            # Save paths
-            video_path = os.path.join(temp_dir, 'video.mp4')
+            # Initialize paths
+            original_video_path = os.path.join(temp_dir, 'original_video.mp4')
+            video_path = os.path.join(temp_dir, 'processed_video.mp4')
             audio_path = os.path.join(temp_dir, 'audio.wav')
             reference_path = os.path.join(
                 temp_dir, secure_filename(inputs['reference_audio'].filename))
@@ -246,45 +270,98 @@ def process_video():
 
             # Process video based on input type
             if inputs['youtube_url']:
-                video_path = download_youtube_video(
-                    inputs['youtube_url'], video_path)
+                original_video_path = download_youtube_video(
+                    inputs['youtube_url'], original_video_path)
+                if not original_video_path:
+                    return jsonify({'error': 'Failed to download YouTube video'}), 500
             else:
                 # Save and process uploaded video file
                 video_file = inputs['video_file']
-                video_file_path = os.path.join(
-                    temp_dir, secure_filename(video_file.filename))
-                video_file.save(video_file_path)
-                # Convert video to standard format if needed
-                command = f"ffmpeg -i {video_file_path} -c:v libx264 -c:a aac {video_path} -y"
-                subprocess.call(command, shell=True)
-                os.remove(video_file_path)  # Clean up original video file
+                video_file.save(original_video_path)
 
-            # Extract audio from video
-            audio_path = extract_audio_from_video(video_path, audio_path)
+            # Preprocess video to lower quality for faster processing
+            video_path = preprocess_video(original_video_path, video_path)
+
+            # Extract audio with optimized settings
+            command = f"ffmpeg -i {video_path} -vn -acodec pcm_s16le -ar 16000 -ac 1 {audio_path} -y"
+            subprocess.call(command, shell=True)
+
+            # Initialize and configure diarization pipeline
+            pipeline = Pipeline.from_pretrained(
+                "pyannote/speaker-diarization",
+                use_auth_token=HF_TOKEN
+            )
+            pipeline.instantiate({
+                "segmentation": {
+                    "min_duration_off": 0.5,
+                    "threshold": 0.5
+                }
+            })
 
             # Perform diarization
-            pipeline = Pipeline.from_pretrained(
-                "pyannote/speaker-diarization", use_auth_token=HF_TOKEN)
             diarization_result = pipeline(audio_path)
 
-            # Extract and match speakers
-            extract_speaker_segments(
-                audio_path, diarization_result, output_dir)
+            # Extract and match speakers with parallel processing
+            from concurrent.futures import ThreadPoolExecutor
+
+            def process_speaker_segment(turn):
+                speech_turn, _, speaker_label = turn
+                start_time = int(speech_turn.start * 1000)
+                end_time = int(speech_turn.end * 1000)
+
+                audio = AudioSegment.from_wav(audio_path)
+                segment = audio[start_time:end_time]
+                output_file = os.path.join(output_dir, f"{speaker_label}.wav")
+
+                if not os.path.exists(output_file):
+                    segment.export(output_file, format="wav")
+
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                list(executor.map(
+                    process_speaker_segment,
+                    diarization_result.itertracks(yield_label=True)
+                ))
+
+            # Match speakers
             matching_speakers, distances = match_speakers(
                 reference_path, output_dir)
 
             if not matching_speakers:
                 return jsonify({'error': 'No matching speakers found'}), 404
 
-            # Generate and upload final video
-            extract_matching_speaker_segments(
-                video_path,
-                diarization_result,
-                matching_speakers,
-                output_video
+            # Generate final video with parallel processing
+            video = VideoFileClip(video_path)
+
+            def process_segment(turn):
+                speech_turn, _, speaker_label = turn
+                if speaker_label in matching_speakers:
+                    return video.subclip(speech_turn.start, speech_turn.end)
+                return None
+
+            with ThreadPoolExecutor() as executor:
+                segments = list(filter(None, executor.map(
+                    process_segment,
+                    diarization_result.itertracks(yield_label=True)
+                )))
+
+            if not segments:
+                video.close()
+                return jsonify({'error': 'No segments found for matching speakers'}), 404
+
+            final_video = concatenate_videoclips(segments)
+            final_video.write_videofile(
+                output_video,
+                codec='libx264',
+                audio_codec='aac',
+                preset='ultrafast',
+                threads=8,
+                temp_audiofile='temp-audio.m4a',
+                remove_temp=True
             )
-            print("uploading to s3 " +
-                  f'processed_videos/{os.path.basename(output_video)}')
+
+            video.close()
+            final_video.close()
+
             # Upload to S3
             s3_url = upload_to_s3(
                 output_video,
@@ -303,7 +380,95 @@ def process_video():
             })
 
     except Exception as e:
+        print(f"Error in process_video: {str(e)}")
         return jsonify({'error': str(e)}), 500
+    finally:
+        # Cleanup any remaining temporary files
+        if 'video' in locals():
+            video.close()
+        if 'final_video' in locals():
+            final_video.close()
+# @app.route('/process_video', methods=['POST'])
+# def process_video():
+#     try:
+#         # Validate inputs
+#         inputs, error = validate_inputs(request)
+#         if error:
+#             return jsonify({'error': error}), 400
+
+#         # Create temporary directory for processing
+#         with tempfile.TemporaryDirectory() as temp_dir:
+#             # Save paths
+#             video_path = os.path.join(temp_dir, 'video.mp4')
+#             audio_path = os.path.join(temp_dir, 'audio.wav')
+#             reference_path = os.path.join(
+#                 temp_dir, secure_filename(inputs['reference_audio'].filename))
+#             output_dir = os.path.join(temp_dir, 'extracted_speakers')
+#             output_video = os.path.join(temp_dir, f'output_{uuid.uuid4()}.mp4')
+
+#             os.makedirs(output_dir, exist_ok=True)
+#             inputs['reference_audio'].save(reference_path)
+
+#             # Process video based on input type
+#             if inputs['youtube_url']:
+#                 video_path = download_youtube_video(
+#                     inputs['youtube_url'], video_path)
+#             else:
+#                 # Save and process uploaded video file
+#                 video_file = inputs['video_file']
+#                 video_file_path = os.path.join(
+#                     temp_dir, secure_filename(video_file.filename))
+#                 video_file.save(video_file_path)
+#                 # Convert video to standard format if needed
+#                 command = f"ffmpeg -i {video_file_path} -c:v libx264 -c:a aac {video_path} -y"
+#                 subprocess.call(command, shell=True)
+#                 os.remove(video_file_path)  # Clean up original video file
+
+#             # Extract audio from video
+#             audio_path = extract_audio_from_video(video_path, audio_path)
+
+#             # Perform diarization
+#             pipeline = Pipeline.from_pretrained(
+#                 "pyannote/speaker-diarization", use_auth_token=HF_TOKEN)
+#             diarization_result = pipeline(audio_path)
+
+#             # Extract and match speakers
+#             extract_speaker_segments(
+#                 audio_path, diarization_result, output_dir)
+#             matching_speakers, distances = match_speakers(
+#                 reference_path, output_dir)
+
+#             if not matching_speakers:
+#                 return jsonify({'error': 'No matching speakers found'}), 404
+
+#             # Generate and upload final video
+#             extract_matching_speaker_segments(
+#                 video_path,
+#                 diarization_result,
+#                 matching_speakers,
+#                 output_video
+#             )
+#             print("uploading to s3 " +
+#                   f'processed_videos/{os.path.basename(output_video)}')
+#             # Upload to S3
+#             s3_url = upload_to_s3(
+#                 output_video,
+#                 S3_BUCKET_NAME,
+#                 f'processed_videos/{os.path.basename(output_video)}'
+#             )
+
+#             if not s3_url:
+#                 return jsonify({'error': 'Failed to upload to S3'}), 500
+
+#             return jsonify({
+#                 'status': 'success',
+#                 'video_url': s3_url,
+#                 'matching_speakers': list(matching_speakers),
+#                 'speaker_distances': distances
+#             })
+
+#     except Exception as e:
+#         return jsonify({'error': str(e)}), 500
 
 
 def generate_video_stream(video_path):
