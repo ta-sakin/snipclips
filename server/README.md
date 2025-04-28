@@ -1,4 +1,4 @@
-<h1 style="text-align:center">VOXSPLIT</h1>
+<h1 style="text-align:center">SNIPCLIPS</h1>
 
 ## Backend setup(for linux)
 
