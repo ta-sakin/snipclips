@@ -67,7 +67,6 @@ export default function VideoProcessor() {
     },
     status: "success",
     video_url: "",
-    // "https://krmu-app.s3.amazonaws.com/processed_videos/output_492771d6-406b-4d70-9218-4b1d5ad83a2d.mp4",
   });
   const [error, setError] = useState<string | null>(null);
   const [isRecording, setIsRecording] = useState(false);
@@ -219,12 +218,13 @@ export default function VideoProcessor() {
 
   return (
     <div className="container mx-auto max-w-3xl p-6 space-y-6">
+      <h3 className="text-center text-3xl font-bold">SNIPCLIPS</h3>
       <Card>
         <CardHeader>
           <CardTitle className="text-2xl">🎬 Video Processor</CardTitle>
           <p className="text-sm text-muted-foreground">
-            Upload a video and reference audio to process speaker-matched
-            segments.
+            Upload a video and reference speaker audio to get all the clips of
+            the speaker's matched segments.
           </p>
         </CardHeader>
 

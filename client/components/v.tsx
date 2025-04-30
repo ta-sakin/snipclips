@@ -67,7 +67,6 @@ import "@vidstack/react/player/styles/base.css";
 //     },
 //     status: "success",
 //     video_url:
-//       "https://krmu-app.s3.amazonaws.com/processed_videos/output_492771d6-406b-4d70-9218-4b1d5ad83a2d.mp4",
 //   });
 //   const [error, setError] = useState<string | null>(null);
 //   const [isRecording, setIsRecording] = useState(false);
