@@ -19,17 +19,19 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 import time
 from functools import wraps
-from install_ffmpeg import (install_ffmpeg)
 import atexit
 from threading import Thread
 import queue
 import redis
 import json
-from install_redis import (check_redis_installed,
-                           install_redis, start_redis_server,
-                           stop_redis_server)
+from setup import (check_redis_installed,
+                   install_redis, start_redis_server,
+                   stop_redis_server, install_ffmpeg)
 import shutil
 import platform
+import torch
+
+
 # Load .env file
 load_dotenv()
 # app = Flask(__name__)
@@ -166,8 +168,9 @@ def extract_audio_from_video(video_path, audio_path):
     return audio_path
 
 
-def get_speaker_embedding(audio_path, embedding_model):
-    inference = Inference(embedding_model, window="whole")
+def get_speaker_embedding(audio_path, embedding_model, batch_size=32):
+    inference = Inference(embedding_model, window="whole",
+                          batch_size=batch_size)
     embedding = inference(audio_path).reshape(1, -1)
     return embedding
 
@@ -283,6 +286,30 @@ def ping():
     return jsonify({"message": "Pong!"})
 
 
+def preprocess_audio(input_path, output_path, max_duration=300):
+    """Preprocess audio to reduce size and duration"""
+    try:
+        # Load audio
+        audio = AudioSegment.from_file(input_path)
+
+        # Convert to mono
+        audio = audio.set_channels(1)
+
+        # Downsample to 16kHz
+        audio = audio.set_frame_rate(16000)
+
+        # Limit duration if needed (e.g., 5 minutes)
+        if len(audio) > max_duration * 1000:
+            audio = audio[:max_duration * 1000]
+
+        # Export
+        audio.export(output_path, format='wav')
+        return True
+    except Exception as e:
+        print(f"Error preprocessing audio: {e}")
+        return False
+
+
 class VideoProcessor(Thread):
     def __init__(self, app, task_id, youtube_url=None, video_file_path=None, reference_audio_path=None):
         super().__init__()
@@ -337,11 +364,20 @@ class VideoProcessor(Thread):
                     "pyannote/speaker-diarization",
                     use_auth_token=HF_TOKEN
                 )
+                device = 'cpu'
+                if torch.cuda.is_available():
+                    device = "cuda"
+                    print(f"Using GPU: {torch.cuda.get_device_name()}")
+                pipeline.to(torch.device(device))
                 pipeline.instantiate({
                     "segmentation": {
-                        "min_duration_off": 0.5,
-                        "threshold": 0.5
-                    }
+                        "min_duration_off": 0.8,
+                        "threshold": 0.55
+                    },
+                    # "clustering": {
+                    #     "method": "fast",
+                    #     "min_cluster_size": 10
+                    # }
                 })
 
                 # Perform diarization

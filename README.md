@@ -1,5 +1,5 @@
 <h1 style="text-align:center">SNIPCLIPS</h1>
-<p>Get all your audio/video clip from a video(with multiple speakers) by adding a reference audio.</p>
+<p>Get all your clips from a video(with multiple speakers) by adding a reference audio.</p>
 
 ![demo](./client/public/demo.png)
 
