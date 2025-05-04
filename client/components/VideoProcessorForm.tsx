@@ -44,10 +44,11 @@ import {
   FormLabel,
   FormMessage,
 } from "./ui/form";
+import { Progress } from "@/components/ui/progress";
 const MAX_FILE_SIZE = 20; //20 mb
 const ALLOWED_AUDIO_EXTENSIONS = ["wav", "mp3"];
 const ALLOWED_VIDEO_EXTENSIONS = ["mp4", "avi", "mov", "mkv"];
-
+const POLLING = 15_000; //15 sec
 export const youtubeRegex =
   /^(?:https?:\/\/)?(?:m\.|www\.)?(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))((\w|-){11})(?:\S+)?$/;
 const youtubeUrlSchema = z
@@ -172,19 +173,6 @@ export default function VideoProcessor() {
   const addAudioElement = (blob: Blob) => {
     const url = URL.createObjectURL(blob);
     setRecordedAudio(url);
-    //     // const existingAudio = document.querySelector("audio");
-
-    //     // // If there's an existing audio element, remove it
-    //     // if (existingAudio) {
-    //     //   existingAudio.remove();
-    //     // }
-
-    //     // const audio = document.createElement("audio");
-    //     // audio.src = url;
-    //     // audio.controls = true;
-    //     // audio.classList.add("mt-4", "border-2", "border-blue-500", "rounded-lg", "shadow-lg");
-
-    //     // document.body.appendChild(audio);
   };
   useEffect(() => {
     console.log({ audioSource, videoSrc });
@@ -229,13 +217,52 @@ export default function VideoProcessor() {
     return eventSource;
   };
 
-  // Update the onSubmit function
+  // Add this function near your other utility functions
+  const pollTaskStatus = async (
+    taskId: string,
+    onProgress: (progress: number, message: string) => void
+  ): Promise<any> => {
+    while (true) {
+      try {
+        const response = await fetch(
+          `http://127.0.0.1:8000/task_status/${taskId}`
+        );
+        if (!response.ok) {
+          throw new Error("Failed to fetch task status");
+        }
+
+        const data = await response.json();
+        console.log("Task status:", data); // Add logging
+
+        if (data.state === "FAILURE") {
+          throw new Error(data.error);
+        }
+
+        if (data.state === "SUCCESS") {
+          return data.result;
+        }
+
+        if (data.state === "PROGRESS") {
+          onProgress(data.percentage, data.status);
+        }
+
+        // Wait before next poll
+        await new Promise((resolve) => setTimeout(resolve, POLLING));
+      } catch (error) {
+        console.error("Error polling task status:", error);
+        throw error;
+      }
+    }
+  };
+
+  // Update your onSubmit function
   const onSubmit = async (data: FormData) => {
     setIsProcessing(true);
     setError(null);
     setResult(null);
     setProcessingProgress(0);
     setProcessingMessage("Starting process...");
+
     try {
       const formData = new FormData();
       if (data.youtubeUrl) formData.append("youtube_url", data.youtubeUrl);
@@ -249,31 +276,32 @@ export default function VideoProcessor() {
         formData.append("reference_audio", blob, "recorded_audio.wav");
       }
 
+      // Start the processing task
       const response = await fetch("http://127.0.0.1:8000/process_video", {
         method: "POST",
         body: formData,
       });
-      const result = await response.json();
-      console.log("response", result);
-      if (result?.error) {
-        throw new Error(result?.error);
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to start processing");
       }
 
-      const progressId = response.headers.get("X-Progress-ID");
+      const { task_id } = await response.json();
 
-      if (progressId) {
-        const eventSource = listenToProgress(progressId);
+      // Poll for results
+      const result = await pollTaskStatus(task_id, (progress, message) => {
+        setProcessingProgress(progress);
+        setProcessingMessage(message);
+      });
+
+      if (result.error) {
+        throw new Error(result.error);
       }
+
       setResult(result);
-
-      // const videoBlob = await response.blob();
-      // const videoUrl = URL.createObjectURL(videoBlob);
-      // setResult({
-      //   status: "success",
-      //   video_url: videoUrl,
-      // });
     } catch (err) {
-      console.log("error ", err);
+      console.error("error ", err);
       if (err instanceof Error) {
         setError(err.message);
       } else {
@@ -287,275 +315,7 @@ export default function VideoProcessor() {
   useEffect(() => {
     console.log("error form", error, errors);
   }, [error, errors]);
-  // <form onSubmit={handleSubmit(onSubmit)}>
-  //   <div>
-  //     <div className="space-y-1">
-  //       <Label
-  //         htmlFor="youtube-url"
-  //         className={cn("flex items-center gap-2")}
-  //       >
-  //         <Youtube className="h-5 w-5 text-gray-500" />
-  //         YouTube URL
-  //         <span className="text-xs text-gray-400"></span>
-  //       </Label>
-  //       <Controller
-  //         name="youtubeUrl"
-  //         control={control}
-  //         render={({ field }) => (
-  //           <div className="space-y-1">
-  //             <Input
-  //               id="youtube-url"
-  //               type="url"
-  //               // disabled
-  //               placeholder="https://www.youtube.com/watch?v=..."
-  //               {...field}
-  //               onChange={(e) => {
-  //                 field.onChange(e);
-  //                 setValue("videoFile", undefined);
-  //               }}
-  //             />
-  //             <p className="text-sm text-muted-foreground">
-  //               Enter a YouTube video URL to process.
-  //             </p>
-  //             {errors?.youtubeUrl && (
-  //               <p className="text-sm text-red-600">
-  //                 {errors?.youtubeUrl?.message}
-  //               </p>
-  //             )}
-  //           </div>
-  //         )}
-  //       />
-  //     </div>
-  //     <div className="my-3 flex justify-center">
-  //       <p className="text-gray-500 font-semibold">----- Or -----</p>
-  //     </div>
-  //     {/* Upload Video */}
-  //     <div className="space-y-1">
-  //       <Label htmlFor="video-file" className="flex items-center gap-2">
-  //         <Upload className="h-5 w-5 text-gray-500" />
-  //         Upload Video File
-  //       </Label>
-  //       <Controller
-  //         disabled={!!watch("youtubeUrl")}
-  //         name="videoFile"
-  //         control={control}
-  //         render={({ field: { value, onChange, ...field } }) => (
-  //           <div>
-  //             {/* <Input
-  //             id="video-file"
-  //             type="file"
-  //             accept="video/*"
-  //             onChange={(e) => {
-  //               onChange(e.target.files?.[0]);
-  //               setValue("youtubeUrl", "");
-  //             }}
-  //             {...field}
-  //           /> */}
-  //             <FileUpload
-  //               // disabled={!!watch("youtubeUrl")}
-  //               // value={value?.[0]}
-  //               onValueChange={onChange}
-  //               accept="video/*"
-  //               maxFiles={1}
-  //               maxSize={5 * 1024 * 1024}
-  //               onFileReject={(_, message) => {
-  //                 setFormError("videoFile", {
-  //                   message,
-  //                 });
-  //               }}
-  //               {...field}
-  //             >
-  //               <FileUploadDropzone>
-  //                 <div className="flex flex-col items-center gap-1 text-center">
-  //                   <div className="flex items-center justify-center rounded-full border p-2.5">
-  //                     <Upload className="size-6 text-muted-foreground" />
-  //                   </div>
-  //                   <p className="font-medium text-sm">
-  //                     Drag & drop video file here
-  //                   </p>
-  //                   <p className="text-muted-foreground text-xs">
-  //                     Or click to browse (max 1 file, up to 5MB)
-  //                   </p>
-  //                 </div>
-  //                 <FileUploadTrigger asChild>
-  //                   <Button
-  //                     variant="outline"
-  //                     size="sm"
-  //                     className="mt-2 w-fit"
-  //                   >
-  //                     Browse file
-  //                   </Button>
-  //                 </FileUploadTrigger>
-  //               </FileUploadDropzone>
-  //               <FileUploadList>
-  //                 {value && (
-  //                   <FileUploadItem value={value}>
-  //                     <FileUploadItemPreview />
-  //                     <FileUploadItemMetadata />
-  //                     <FileUploadItemDelete asChild>
-  //                       <Button
-  //                         variant="ghost"
-  //                         size="icon"
-  //                         className="size-7"
-  //                       >
-  //                         <X />
-  //                         <span className="sr-only">Delete</span>
-  //                       </Button>
-  //                     </FileUploadItemDelete>
-  //                   </FileUploadItem>
-  //                 )}
-  //                 {/* {value?.map((file, index) => (
-  //               ))} */}
-  //               </FileUploadList>
-  //             </FileUpload>
-  //             {errors?.youtubeUrl && (
-  //               <p className="text-sm text-red-600">
-  //                 {errors?.youtubeUrl?.message}
-  //               </p>
-  //             )}
-  //           </div>
-  //         )}
-  //       />
 
-  //       <p className="text-sm text-muted-foreground">
-  //         Upload a video file from your device.
-  //       </p>
-  //     </div>
-  //   </div>
-  //   <div className="space-y-6">
-  //     {/* Video Preview */}
-  //     {videoSrc && !(errors.youtubeUrl || errors.videoFile) && (
-  //       <div className="mt-3">
-  //         <Player key={videoSrc} src={videoSrc} />
-  //       </div>
-  //     )}
-
-  //     {/* Reference Audio Option */}
-  //     <div className="space-y-2">
-  //       <Label className="block">Reference Audio</Label>
-  //       <Controller
-  //         name="audioSource"
-  //         control={control}
-  //         render={({ field: { onChange, value } }) => (
-  //           <RadioGroup
-  //             value={value}
-  //             onValueChange={(val: "file" | "record") => {
-  //               onChange(val);
-  //               setValue("referenceAudio", undefined);
-  //               setRecordedAudio(null);
-  //             }}
-  //           >
-  //             <div className="flex items-center gap-2">
-  //               <RadioGroupItem value="file" id="audio-file" />
-  //               <Label htmlFor="audio-file">Upload Audio File</Label>
-  //             </div>
-  //             <div className="flex items-center gap-2">
-  //               <RadioGroupItem value="record" id="audio-record" />
-  //               <Label htmlFor="audio-record">Record Audio</Label>
-  //             </div>
-  //           </RadioGroup>
-  //         )}
-  //       />
-  //     </div>
-
-  //     {/* Upload Audio */}
-  //     {audioSource === "file" && (
-  //       <div className="space-y-1">
-  //         <Label htmlFor="reference-audio">
-  //           Upload Reference Audio
-  //         </Label>
-  //         <Controller
-  //           name="referenceAudio"
-  //           control={control}
-  //           render={({ field: { value, onChange, ...field } }) => (
-  //             <Input
-  //               id="reference-audio"
-  //               type="file"
-  //               accept="audio/*"
-  //               onChange={(e) => onChange(e.target.files?.[0])}
-  //               aria-describedby="reference-audio-description"
-  //               {...field}
-  //             />
-  //           )}
-  //         />
-
-  //         <p className="text-sm text-muted-foreground">
-  //           Upload a reference audio file for speaker matching.
-  //         </p>
-  //         {audioSrc && (
-  //           <div className="mt-3">
-  //             <Player type="audio" key={audioSrc} src={audioSrc} />
-  //           </div>
-  //         )}
-  //       </div>
-  //     )}
-
-  //     {/* Record Audio */}
-  //     {audioSource === "record" && (
-  //       <div className="space-y-3">
-  //         <AudioRecorder
-  //           onRecordingComplete={addAudioElement}
-  //           audioTrackConstraints={{
-  //             noiseSuppression: true,
-  //             echoCancellation: true,
-  //           }}
-  //           showVisualizer
-  //           downloadOnSavePress={false}
-  //           downloadFileExtension="mp3"
-  //         />
-  //         {recordedAudio && (
-  //           <div className="flex items-center gap-3">
-  //             <audio src={recordedAudio} controls className="w-64" />
-  //             <Button
-  //               size="icon"
-  //               variant="outline"
-  //               onClick={() => setRecordedAudio(null)}
-  //             >
-  //               <X className="h-5 w-5" />
-  //             </Button>
-  //           </div>
-  //         )}
-  //       </div>
-  //     )}
-
-  //     {/* Submit */}
-  //     <Button
-  //       type="submit"
-  //       disabled={
-  //         !videoSrc ||
-  //         !(audioSource === "file" ? referenceAudio : recordedAudio) ||
-  //         isLoading ||
-  //         isProcessing
-  //       }
-  //       className="w-full"
-  //     >
-  //       {isProcessing ? "Processing..." : "Process Video"}
-  //     </Button>
-
-  //     {/* Validation/Error Alerts */}
-  //     {/* {(errors.youtubeUrl ||
-  //       errors.videoFile ||
-  //       errors.referenceAudio) && (
-  //       <Alert variant="destructive">
-  //         <AlertCircle className="h-4 w-4" />
-  //         <AlertTitle>Error</AlertTitle>
-  //         <AlertDescription>
-  //           {errors.youtubeUrl?.message ||
-  //             errors.videoFile?.message ||
-  //             errors.referenceAudio?.message}
-  //         </AlertDescription>
-  //       </Alert>
-  //     )} */}
-
-  //     {error && (
-  //       <Alert variant="destructive" className="mt-2">
-  //         <AlertCircle className="h-4 w-4" />
-  //         <AlertTitle>Error</AlertTitle>
-  //         <AlertDescription>{error}</AlertDescription>
-  //       </Alert>
-  //     )}
-  //   </div>
-  // </form>
   return (
     <div className="container mx-auto max-w-3xl p-6 space-y-6">
       <h3 className="text-center text-3xl font-bold">SNIPCLIPS</h3>
@@ -845,18 +605,30 @@ export default function VideoProcessor() {
               )}
 
               {/* Submit */}
-              <Button
-                type="submit"
-                disabled={
-                  !videoSrc ||
-                  !(audioSource === "file" ? referenceAudio : recordedAudio) ||
-                  isLoading ||
-                  isProcessing
-                }
-                className="w-full"
-              >
-                {isProcessing ? "Processing..." : "Process Video"}
-              </Button>
+              {!isProcessing ? (
+                <Button
+                  type="submit"
+                  disabled={
+                    !videoSrc ||
+                    !(audioSource === "file"
+                      ? referenceAudio
+                      : recordedAudio) ||
+                    isLoading ||
+                    isProcessing
+                  }
+                  className="w-full"
+                >
+                  {isProcessing ? "Processing..." : "Process Video"}
+                </Button>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex justify-between text-sm text-muted-foreground">
+                    <span>Processing...</span>
+                    <span>{processingProgress}%</span>
+                  </div>
+                  <Progress value={processingProgress} className="h-2" />
+                </div>
+              )}
 
               {error && (
                 <Alert variant="destructive" className="mt-2">
@@ -871,20 +643,6 @@ export default function VideoProcessor() {
 
         <CardContent>
           {/* Processing Progress */}
-          {/* {isProcessing && (
-            <div className="mt-6 space-y-1">
-              <div className="flex justify-between text-sm text-muted-foreground">
-                <span>{processingMessage}</span>
-                <span>{processingProgress}%</span>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-2.5">
-                <div
-                  className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
-                  style={{ width: `${processingProgress}%` }}
-                />
-              </div>
-            </div>
-          )} */}
 
           {/* Final Output */}
           {result?.video_url && (

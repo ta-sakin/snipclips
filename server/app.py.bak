@@ -20,22 +20,12 @@ from concurrent.futures import ThreadPoolExecutor
 import time
 from functools import wraps
 from install_ffmpeg import (install_ffmpeg)
-import atexit
-from threading import Thread
-import queue
-import redis
-import json
-from install_redis import (check_redis_installed,
-                           install_redis, start_redis_server,
-                           stop_redis_server)
-import shutil
-import platform
 # Load .env file
 load_dotenv()
-# app = Flask(__name__)
-# CORS(app)
-# app.config["REDIS_URL"] = "redis://localhost"
-# app.register_blueprint(sse, url_prefix='/stream')
+app = Flask(__name__)
+CORS(app)
+app.config["REDIS_URL"] = "redis://localhost"
+app.register_blueprint(sse, url_prefix='/stream')
 # Configuration
 ALLOWED_AUDIO_EXTENSIONS = {'wav', 'mp3'}
 ALLOWED_VIDEO_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv'}
@@ -52,55 +42,7 @@ s3_client = boto3.client(
     aws_secret_access_key=AWS_SECRET_KEY,
     region_name=AWS_REGION
 )
-
-
-def process_tasks(task_queue):
-    """Background thread to process tasks from the queue"""
-    while True:
-        try:
-            task = task_queue.get()
-            if task is None:
-                break
-            task.start()
-            task.join()
-        except Exception as e:
-            print(f"Error processing task: {e}")
-
-
-def create_app():
-    """Create and initialize the Flask application"""
-    app = Flask(__name__)
-    CORS(app)
-    app.config["REDIS_URL"] = "redis://localhost"
-    app.register_blueprint(sse, url_prefix='/stream')
-
-    # Initialize dependencies
-    with app.app_context():
-        # install ffmpeg
-        install_ffmpeg()
-        # Initialize Redis
-        if not check_redis_installed():
-            install_redis()
-        start_redis_server()
-
-        # Initialize Redis client
-        app.redis_client = redis.Redis(host='localhost', port=6379, db=0)
-
-        # Initialize task queue
-        app.task_queue = queue.Queue()
-
-        # Start the task processor thread
-        app.task_processor = Thread(
-            target=process_tasks, args=(app.task_queue,))
-        # Make thread daemon so it exits when main thread exits
-        app.task_processor.daemon = True
-        app.task_processor.start()
-
-    return app
-
-
-# Create the app
-app = create_app()
+install_ffmpeg()
 
 
 def timer(func):
@@ -283,88 +225,143 @@ def ping():
     return jsonify({"message": "Pong!"})
 
 
-class VideoProcessor(Thread):
-    def __init__(self, app, task_id, youtube_url=None, video_file_path=None, reference_audio_path=None):
-        super().__init__()
-        self.app = app
-        self.task_id = task_id
-        self.youtube_url = youtube_url
-        self.video_file_path = video_file_path
-        self.reference_audio_path = reference_audio_path
+@app.route('/process_video', methods=['POST'])
+def process_video():
+    @timer
+    def preprocess_video(input_path, output_path):
+        """Reduce video quality for faster processing"""
+        command = f"ffmpeg -i {input_path} -vf scale=854:480 -c:v libx264 -preset ultrafast -crf 28 -c:a aac -b:a 128k {output_path} -y"
+        subprocess.call(command, shell=True)
+        return output_path
 
-    def update_progress(self, message, percentage):
-        self.app.redis_client.set(
-            f"task:{self.task_id}",
-            json.dumps({
-                'state': 'PROGRESS',
-                'message': message,
-                'percentage': percentage
+    try:
+        # Validate inputs
+        inputs, error = validate_inputs(request)
+        if error:
+            return jsonify({'error': error}), 400
+
+        # Create temporary directory for processing
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Initialize paths
+            original_video_path = os.path.join(temp_dir, 'original_video.mp4')
+            video_path = os.path.join(temp_dir, 'processed_video.mp4')
+            audio_path = os.path.join(temp_dir, 'audio.wav')
+            reference_path = os.path.join(
+                temp_dir, secure_filename(inputs['reference_audio'].filename))
+            output_dir = os.path.join(temp_dir, 'extracted_speakers')
+            output_video = os.path.join(temp_dir, f'output_{uuid.uuid4()}.mp4')
+
+            os.makedirs(output_dir, exist_ok=True)
+            inputs['reference_audio'].save(reference_path)
+
+            # Process video based on input type
+            if inputs['youtube_url']:
+                actual_output, error = download_youtube_video(
+                    inputs['youtube_url'], original_video_path)
+                original_video_path = actual_output
+                if not original_video_path or error:
+                    return jsonify({'error': error}), 500
+            else:
+                # Save and process uploaded video file
+                video_file = inputs['video_file']
+                video_file.save(original_video_path)
+
+            # Preprocess video to lower quality for faster processing
+            video_path = preprocess_video(original_video_path, video_path)
+
+            # Extract audio with optimized settings
+            command = f"ffmpeg -i {video_path} -vn -acodec pcm_s16le -ar 16000 -ac 1 {audio_path} -y"
+            subprocess.call(command, shell=True)
+
+            # Initialize and configure diarization pipeline
+            pipeline = Pipeline.from_pretrained(
+                "pyannote/speaker-diarization",
+                use_auth_token=HF_TOKEN
+            )
+            pipeline.instantiate({
+                "segmentation": {
+                    "min_duration_off": 0.5,
+                    "threshold": 0.5
+                }
             })
-        )
 
-    def run(self):
-        try:
-            with tempfile.TemporaryDirectory() as temp_dir:
-                # Initialize paths
-                video_path = os.path.join(temp_dir, 'processed_video.mp4')
-                audio_path = os.path.join(temp_dir, 'audio.wav')
-                output_dir = os.path.join(temp_dir, 'extracted_speakers')
-                output_video = os.path.join(
-                    temp_dir, f'output_{uuid.uuid4()}.mp4')
-                os.makedirs(output_dir, exist_ok=True)
+            # Perform diarization
+            diarization_result = pipeline(audio_path)
 
-                self.update_progress("Processing input files...", 10)
+            # Extract and match speakers with parallel processing
+            from concurrent.futures import ThreadPoolExecutor
 
-                # Process video based on input type
-                if self.youtube_url:
-                    actual_output, error = download_youtube_video(
-                        self.youtube_url, video_path)
-                    if error:
-                        raise Exception(error)
-                    video_path = actual_output
-                else:
-                    # Copy uploaded video to processing directory
-                    shutil.copy2(self.video_file_path, video_path)
+            def process_speaker_segment(turn):
+                speech_turn, _, speaker_label = turn
+                start_time = int(speech_turn.start * 1000)
+                end_time = int(speech_turn.end * 1000)
 
-                self.update_progress("Extracting audio...", 30)
-                # Extract audio with optimized settings
-                command = f"ffmpeg -i {video_path} -vn -acodec pcm_s16le -ar 16000 -ac 1 {audio_path} -y"
-                subprocess.call(command, shell=True)
+                audio = AudioSegment.from_wav(audio_path)
+                segment = audio[start_time:end_time]
+                output_file = os.path.join(output_dir, f"{speaker_label}.wav")
 
-                self.update_progress("Performing speaker diarization...", 50)
-                # Initialize and configure diarization pipeline
-                pipeline = Pipeline.from_pretrained(
-                    "pyannote/speaker-diarization",
-                    use_auth_token=HF_TOKEN
-                )
-                pipeline.instantiate({
-                    "segmentation": {
-                        "min_duration_off": 0.5,
-                        "threshold": 0.5
-                    }
-                })
+                if not os.path.exists(output_file):
+                    segment.export(output_file, format="wav")
 
-                # Perform diarization
-                diarization_result = pipeline(audio_path)
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                list(executor.map(
+                    process_speaker_segment,
+                    diarization_result.itertracks(yield_label=True)
+                ))
 
-                self.update_progress("Extracting speaker segments...", 70)
-                # Extract speaker segments
-                extract_speaker_segments(
-                    audio_path, diarization_result, output_dir)
+            # # Match speakers
+            # matching_speakers, distances = match_speakers(
+            #     reference_path, output_dir)
 
-                self.update_progress("Matching speakers...", 80)
-                # Match speakers
-                matching_speakers, distances = match_speakers(
-                    self.reference_audio_path, output_dir)
+            # if not matching_speakers:
+            #     return jsonify({'error': 'No matching speakers found'}), 404
 
-                if not matching_speakers:
-                    raise Exception('No matching speakers found')
+            # # Generate final video with parallel processing
+            # video = VideoFileClip(video_path)
 
-                self.update_progress("Generating final video...", 90)
-                # Generate final video
+            # def process_segment(turn):
+            #     speech_turn, _, speaker_label = turn
+            #     if speaker_label in matching_speakers:
+            #         return video.subclip(speech_turn.start, speech_turn.end)
+            #     return None
+
+            # with ThreadPoolExecutor() as executor:
+            #     segments = list(filter(None, executor.map(
+            #         process_segment,
+            #         diarization_result.itertracks(yield_label=True)
+            #     )))
+
+            # if not segments:
+            #     video.close()
+            #     return jsonify({'error': 'No segments found for matching speakers'}), 404
+
+            # final_video = concatenate_videoclips(segments)
+            # final_video.write_videofile(
+            #     output_video,
+            #     codec='libx264',
+            #     audio_codec='aac',
+            #     preset='ultrafast',
+            #     threads=8,
+            #     temp_audiofile='temp-audio.m4a',
+            #     remove_temp=True
+            # )
+
+            # video.close()
+            # final_video.close()
+
+            # Match speakers
+            matching_speakers, distances = match_speakers(
+                reference_path, output_dir)
+
+            if not matching_speakers:
+                return jsonify({'error': 'No matching speakers found'}), 404
+
+            # Generate final video with parallel processing
+            try:
                 video = VideoFileClip(video_path)
-                segments = []
 
+                segments = []
+                # Process segments sequentially instead of using ThreadPoolExecutor
                 for speech_turn, _, speaker_label in diarization_result.itertracks(yield_label=True):
                     if speaker_label in matching_speakers:
                         try:
@@ -377,7 +374,7 @@ class VideoProcessor(Thread):
 
                 if not segments:
                     video.close()
-                    raise Exception('No segments found for matching speakers')
+                    return jsonify({'error': 'No segments found for matching speakers'}), 404
 
                 final_video = concatenate_videoclips(segments)
                 final_video.write_videofile(
@@ -385,151 +382,54 @@ class VideoProcessor(Thread):
                     codec='libx264',
                     audio_codec='aac',
                     preset='ultrafast',
-                    threads=4,
+                    threads=4,  # Reduced from 8 to 4 for better stability
                     temp_audiofile='temp-audio.m4a',
                     remove_temp=True
                 )
 
-                # Clean up video objects
+                # Make sure to close video objects
                 for segment in segments:
                     segment.close()
                 video.close()
                 final_video.close()
 
+            except Exception as e:
+                print(f"Error during video processing: {e}")
+                # Clean up resources if they exist
+                if 'video' in locals():
+                    video.close()
+                if 'final_video' in locals():
+                    final_video.close()
+                if 'segments' in locals():
+                    for segment in segments:
+                        segment.close()
+                raise
                 # Upload to S3
-                self.update_progress("Uploading video...", 95)
-                s3_url = upload_to_s3(
-                    output_video,
-                    S3_BUCKET_NAME,
-                    f'processed_videos/{os.path.basename(output_video)}'
-                )
-
-                if not s3_url:
-                    raise Exception('Failed to upload to S3')
-
-                # Final result
-                result = {
-                    'status': 'success',
-                    'video_url': s3_url,
-                    'matching_speakers': list(matching_speakers),
-                    'speaker_distances': distances
-                }
-
-                self.update_progress("Complete!", 100)
-                self.app.redis_client.set(
-                    f"task:{self.task_id}",
-                    json.dumps({'state': 'SUCCESS', 'result': result})
-                )
-
-        except Exception as e:
-            print(f"Error in video processing: {e}")
-            self.app.redis_client.set(
-                f"task:{self.task_id}",
-                json.dumps({'state': 'FAILURE', 'error': str(e)})
-            )
-        finally:
-            # Clean up temporary files
-            if self.video_file_path and os.path.exists(self.video_file_path):
-                try:
-                    os.remove(self.video_file_path)
-                except Exception as e:
-                    print(f"Error cleaning up video file: {e}")
-
-            if self.reference_audio_path and os.path.exists(self.reference_audio_path):
-                try:
-                    os.remove(self.reference_audio_path)
-                except Exception as e:
-                    print(f"Error cleaning up audio file: {e}")
-
-
-@app.route('/process_video', methods=['POST'])
-def process_video():
-    try:
-        # Validate inputs
-        inputs, error = validate_inputs(request)
-        if error:
-            return jsonify({'error': error}), 400
-
-        # Create temporary directory for file storage
-        temp_dir = tempfile.mkdtemp()
-
-        try:
-            # Save files to temporary directory
-            video_file_path = None
-            if inputs['video_file']:
-                video_file_path = os.path.join(
-                    temp_dir, secure_filename(inputs['video_file'].filename))
-                inputs['video_file'].save(video_file_path)
-
-            reference_audio_path = os.path.join(
-                temp_dir, secure_filename(inputs['reference_audio'].filename))
-            inputs['reference_audio'].save(reference_audio_path)
-
-            # Generate task ID
-            task_id = str(uuid.uuid4())
-
-            # Create and queue the task
-            task = VideoProcessor(
-                app,  # Pass the app instance
-                task_id,
-                youtube_url=inputs.get('youtube_url'),
-                video_file_path=video_file_path,
-                reference_audio_path=reference_audio_path
+            s3_url = upload_to_s3(
+                output_video,
+                S3_BUCKET_NAME,
+                f'processed_videos/{os.path.basename(output_video)}'
             )
 
-            # Initialize task status in Redis
-            app.redis_client.set(
-                f"task:{task_id}",
-                json.dumps({'state': 'PENDING'})
-            )
+            if not s3_url:
+                return jsonify({'error': 'Failed to upload to S3'}), 500
 
-            # Add task to queue
-            app.task_queue.put(task)
-
-            return jsonify({'task_id': task_id}), 202
-
-        except Exception as e:
-            # Clean up temp directory if there's an error
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            raise e
+            return jsonify({
+                'status': 'success',
+                'video_url': s3_url,
+                'matching_speakers': list(matching_speakers),
+                'speaker_distances': distances
+            })
 
     except Exception as e:
-        print(f"Error in process_video: {e}")
+        print(f"Error in process_video: {str(e)}")
         return jsonify({'error': str(e)}), 500
-
-
-@app.route('/task_status/<task_id>', methods=['GET'])
-def task_status(task_id):
-    try:
-        status = app.redis_client.get(f"task:{task_id}")
-        if status is None:
-            return jsonify({'state': 'PENDING'})
-
-        return jsonify(json.loads(status))
-    except Exception as e:
-        print(f"Error getting task status: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-# Update the cleanup function
-
-
-@atexit.register
-def cleanup():
-    try:
-        # Stop task processor
-        app.task_queue.put(None)  # Signal the task processor to stop
-        # Wait for task processor to finish with timeout
-        app.task_processor.join(timeout=1)
-
-        # Close Redis client connection
-        app.redis_client.close()
-
-        # Stop Redis server
-        stop_redis_server()
-
-    except Exception as e:
-        print(f"Error during cleanup: {e}")
+    finally:
+        # Cleanup any remaining temporary files
+        if 'video' in locals():
+            video.close()
+        if 'final_video' in locals():
+            final_video.close()
 
 
 def generate_video_stream(video_path):
