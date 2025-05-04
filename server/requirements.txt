@@ -7,7 +7,7 @@ moviepy==1.0.3
 pip==24.0
 pyannote.audio==3.3.2
 pydub==0.25.1
-yt-dlp==2024.10.22
+yt-dlp==2025.4.30
 python-dotenv==1.0.1
 Flask-Cors==5.0.0
 flask-sse==1.0.0 

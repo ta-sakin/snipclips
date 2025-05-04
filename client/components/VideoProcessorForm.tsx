@@ -1,7 +1,7 @@
 "use client";
 import "@vidstack/react/player/styles/base.css";
 import { AudioRecorder } from "react-audio-voice-recorder";
-import { X } from "lucide-react";
+import { CloudUpload, X } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,33 +25,99 @@ import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { MediaPlayer, MediaProvider } from "@vidstack/react";
 import { Player } from "./video/player";
+import { cn } from "@/lib/utils";
+import {
+  FileUpload,
+  FileUploadDropzone,
+  FileUploadItem,
+  FileUploadItemDelete,
+  FileUploadItemMetadata,
+  FileUploadItemPreview,
+  FileUploadList,
+  FileUploadTrigger,
+} from "@/components/ui/file-upload";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "./ui/form";
+const MAX_FILE_SIZE = 20; //20 mb
+const ALLOWED_AUDIO_EXTENSIONS = ["wav", "mp3"];
+const ALLOWED_VIDEO_EXTENSIONS = ["mp4", "avi", "mov", "mkv"];
 
+export const youtubeRegex =
+  /^(?:https?:\/\/)?(?:m\.|www\.)?(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))((\w|-){11})(?:\S+)?$/;
+const youtubeUrlSchema = z
+  .string()
+  .trim()
+  .refine((val) => val === "" || youtubeRegex.test(val), {
+    message: "Must be a valid YouTube URL.",
+  });
 const schema = z
   .object({
-    youtubeUrl: z
-      .string()
-      .url()
-      .regex(/^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.?be)\/.+$/)
+    youtubeUrl: youtubeUrlSchema.optional(),
+    // youtubeUrl: z
+    //   .string()
+    //   .url()
+    //   .regex(youtubeRegex)
+    //   .optional()
+    //   .or(z.literal("")),
+    videoFile: z
+      .instanceof(File)
       .optional()
-      .or(z.literal("")),
-    videoFile: z.instanceof(File).optional(),
+      .refine(
+        (file) => {
+          if (!file) return true; // allow undefined (optional)
+          const ext = file.name.split(".").pop()?.toLowerCase();
+          return ext && ALLOWED_VIDEO_EXTENSIONS.includes(ext);
+        },
+        {
+          message: `Only ${ALLOWED_VIDEO_EXTENSIONS.join(
+            ", "
+          )} files are allowed.`,
+        }
+      ),
     audioSource: z.enum(["file", "record"]),
-    referenceAudio: z.instanceof(File).optional(),
+    referenceAudio: z
+      .instanceof(File)
+      .optional()
+      .refine(
+        (file) => {
+          if (!file) return true; // allow undefined (optional)
+          const ext = file.name.split(".").pop()?.toLowerCase();
+          return ext && ALLOWED_AUDIO_EXTENSIONS.includes(ext);
+        },
+        {
+          message: `Only ${ALLOWED_AUDIO_EXTENSIONS.join(
+            ", "
+          )} files are allowed.`,
+        }
+      ),
   })
   .refine(
     (data) => {
-      if (!data.youtubeUrl && !data.videoFile) {
-        return false;
-      }
+      // if (!data.youtubeUrl && !data.videoFile) {
+      //   return false;
+      // }
       if (data.audioSource === "file" && !data.referenceAudio) {
         return false;
       }
+      // if (data.audioSource === "file" && !data.referenceAudio) {
+      //   context.addIssue({
+      //     path: ["referenceAudio"],
+      //     code: z.ZodIssueCode.custom,
+      //     message: "Reference audio file is required",
+      //   });
+      // }
       return true;
     },
     {
       message:
         "Please provide either a YouTube URL or a video file, and a reference audio file if 'Upload Audio File' is selected.",
-      path: ["youtubeUrl", "videoFile", "referenceAudio"],
+      path: ["referenceAudio"],
     }
   );
 
@@ -80,20 +146,22 @@ export default function VideoProcessor() {
   const [processingMessage, setProcessingMessage] = useState<string>("");
   const [isProcessing, setIsProcessing] = useState(false);
 
-  const {
-    control,
-    handleSubmit,
-    watch,
-    setValue,
-    formState: { errors },
-  } = useForm<FormData>({
+  const form = useForm<FormData>({
     resolver: zodResolver(schema),
+    mode: "onChange",
     defaultValues: {
       youtubeUrl: "",
       audioSource: "file",
     },
   });
-
+  const {
+    handleSubmit,
+    watch,
+    setValue,
+    setError: setFormError,
+    formState: { errors },
+    ...rest
+  } = form;
   const audioSource = watch("audioSource");
   const referenceAudio = watch("referenceAudio");
   const youtubeUrl = watch("youtubeUrl");
@@ -119,7 +187,7 @@ export default function VideoProcessor() {
     //     // document.body.appendChild(audio);
   };
   useEffect(() => {
-    console.log({ audioSource });
+    console.log({ audioSource, videoSrc });
     if (youtubeUrl) {
       setVideoSrc(youtubeUrl);
     } else if (videoFile) {
@@ -185,9 +253,10 @@ export default function VideoProcessor() {
         method: "POST",
         body: formData,
       });
-
-      if (!response.ok) {
-        throw new Error("Failed to process video");
+      const result = await response.json();
+      console.log("response", result);
+      if (result?.error) {
+        throw new Error(result?.error);
       }
 
       const progressId = response.headers.get("X-Progress-ID");
@@ -195,7 +264,6 @@ export default function VideoProcessor() {
       if (progressId) {
         const eventSource = listenToProgress(progressId);
       }
-      const result = await response.json();
       setResult(result);
 
       // const videoBlob = await response.blob();
@@ -216,6 +284,278 @@ export default function VideoProcessor() {
     }
   };
 
+  useEffect(() => {
+    console.log("error form", error, errors);
+  }, [error, errors]);
+  // <form onSubmit={handleSubmit(onSubmit)}>
+  //   <div>
+  //     <div className="space-y-1">
+  //       <Label
+  //         htmlFor="youtube-url"
+  //         className={cn("flex items-center gap-2")}
+  //       >
+  //         <Youtube className="h-5 w-5 text-gray-500" />
+  //         YouTube URL
+  //         <span className="text-xs text-gray-400"></span>
+  //       </Label>
+  //       <Controller
+  //         name="youtubeUrl"
+  //         control={control}
+  //         render={({ field }) => (
+  //           <div className="space-y-1">
+  //             <Input
+  //               id="youtube-url"
+  //               type="url"
+  //               // disabled
+  //               placeholder="https://www.youtube.com/watch?v=..."
+  //               {...field}
+  //               onChange={(e) => {
+  //                 field.onChange(e);
+  //                 setValue("videoFile", undefined);
+  //               }}
+  //             />
+  //             <p className="text-sm text-muted-foreground">
+  //               Enter a YouTube video URL to process.
+  //             </p>
+  //             {errors?.youtubeUrl && (
+  //               <p className="text-sm text-red-600">
+  //                 {errors?.youtubeUrl?.message}
+  //               </p>
+  //             )}
+  //           </div>
+  //         )}
+  //       />
+  //     </div>
+  //     <div className="my-3 flex justify-center">
+  //       <p className="text-gray-500 font-semibold">----- Or -----</p>
+  //     </div>
+  //     {/* Upload Video */}
+  //     <div className="space-y-1">
+  //       <Label htmlFor="video-file" className="flex items-center gap-2">
+  //         <Upload className="h-5 w-5 text-gray-500" />
+  //         Upload Video File
+  //       </Label>
+  //       <Controller
+  //         disabled={!!watch("youtubeUrl")}
+  //         name="videoFile"
+  //         control={control}
+  //         render={({ field: { value, onChange, ...field } }) => (
+  //           <div>
+  //             {/* <Input
+  //             id="video-file"
+  //             type="file"
+  //             accept="video/*"
+  //             onChange={(e) => {
+  //               onChange(e.target.files?.[0]);
+  //               setValue("youtubeUrl", "");
+  //             }}
+  //             {...field}
+  //           /> */}
+  //             <FileUpload
+  //               // disabled={!!watch("youtubeUrl")}
+  //               // value={value?.[0]}
+  //               onValueChange={onChange}
+  //               accept="video/*"
+  //               maxFiles={1}
+  //               maxSize={5 * 1024 * 1024}
+  //               onFileReject={(_, message) => {
+  //                 setFormError("videoFile", {
+  //                   message,
+  //                 });
+  //               }}
+  //               {...field}
+  //             >
+  //               <FileUploadDropzone>
+  //                 <div className="flex flex-col items-center gap-1 text-center">
+  //                   <div className="flex items-center justify-center rounded-full border p-2.5">
+  //                     <Upload className="size-6 text-muted-foreground" />
+  //                   </div>
+  //                   <p className="font-medium text-sm">
+  //                     Drag & drop video file here
+  //                   </p>
+  //                   <p className="text-muted-foreground text-xs">
+  //                     Or click to browse (max 1 file, up to 5MB)
+  //                   </p>
+  //                 </div>
+  //                 <FileUploadTrigger asChild>
+  //                   <Button
+  //                     variant="outline"
+  //                     size="sm"
+  //                     className="mt-2 w-fit"
+  //                   >
+  //                     Browse file
+  //                   </Button>
+  //                 </FileUploadTrigger>
+  //               </FileUploadDropzone>
+  //               <FileUploadList>
+  //                 {value && (
+  //                   <FileUploadItem value={value}>
+  //                     <FileUploadItemPreview />
+  //                     <FileUploadItemMetadata />
+  //                     <FileUploadItemDelete asChild>
+  //                       <Button
+  //                         variant="ghost"
+  //                         size="icon"
+  //                         className="size-7"
+  //                       >
+  //                         <X />
+  //                         <span className="sr-only">Delete</span>
+  //                       </Button>
+  //                     </FileUploadItemDelete>
+  //                   </FileUploadItem>
+  //                 )}
+  //                 {/* {value?.map((file, index) => (
+  //               ))} */}
+  //               </FileUploadList>
+  //             </FileUpload>
+  //             {errors?.youtubeUrl && (
+  //               <p className="text-sm text-red-600">
+  //                 {errors?.youtubeUrl?.message}
+  //               </p>
+  //             )}
+  //           </div>
+  //         )}
+  //       />
+
+  //       <p className="text-sm text-muted-foreground">
+  //         Upload a video file from your device.
+  //       </p>
+  //     </div>
+  //   </div>
+  //   <div className="space-y-6">
+  //     {/* Video Preview */}
+  //     {videoSrc && !(errors.youtubeUrl || errors.videoFile) && (
+  //       <div className="mt-3">
+  //         <Player key={videoSrc} src={videoSrc} />
+  //       </div>
+  //     )}
+
+  //     {/* Reference Audio Option */}
+  //     <div className="space-y-2">
+  //       <Label className="block">Reference Audio</Label>
+  //       <Controller
+  //         name="audioSource"
+  //         control={control}
+  //         render={({ field: { onChange, value } }) => (
+  //           <RadioGroup
+  //             value={value}
+  //             onValueChange={(val: "file" | "record") => {
+  //               onChange(val);
+  //               setValue("referenceAudio", undefined);
+  //               setRecordedAudio(null);
+  //             }}
+  //           >
+  //             <div className="flex items-center gap-2">
+  //               <RadioGroupItem value="file" id="audio-file" />
+  //               <Label htmlFor="audio-file">Upload Audio File</Label>
+  //             </div>
+  //             <div className="flex items-center gap-2">
+  //               <RadioGroupItem value="record" id="audio-record" />
+  //               <Label htmlFor="audio-record">Record Audio</Label>
+  //             </div>
+  //           </RadioGroup>
+  //         )}
+  //       />
+  //     </div>
+
+  //     {/* Upload Audio */}
+  //     {audioSource === "file" && (
+  //       <div className="space-y-1">
+  //         <Label htmlFor="reference-audio">
+  //           Upload Reference Audio
+  //         </Label>
+  //         <Controller
+  //           name="referenceAudio"
+  //           control={control}
+  //           render={({ field: { value, onChange, ...field } }) => (
+  //             <Input
+  //               id="reference-audio"
+  //               type="file"
+  //               accept="audio/*"
+  //               onChange={(e) => onChange(e.target.files?.[0])}
+  //               aria-describedby="reference-audio-description"
+  //               {...field}
+  //             />
+  //           )}
+  //         />
+
+  //         <p className="text-sm text-muted-foreground">
+  //           Upload a reference audio file for speaker matching.
+  //         </p>
+  //         {audioSrc && (
+  //           <div className="mt-3">
+  //             <Player type="audio" key={audioSrc} src={audioSrc} />
+  //           </div>
+  //         )}
+  //       </div>
+  //     )}
+
+  //     {/* Record Audio */}
+  //     {audioSource === "record" && (
+  //       <div className="space-y-3">
+  //         <AudioRecorder
+  //           onRecordingComplete={addAudioElement}
+  //           audioTrackConstraints={{
+  //             noiseSuppression: true,
+  //             echoCancellation: true,
+  //           }}
+  //           showVisualizer
+  //           downloadOnSavePress={false}
+  //           downloadFileExtension="mp3"
+  //         />
+  //         {recordedAudio && (
+  //           <div className="flex items-center gap-3">
+  //             <audio src={recordedAudio} controls className="w-64" />
+  //             <Button
+  //               size="icon"
+  //               variant="outline"
+  //               onClick={() => setRecordedAudio(null)}
+  //             >
+  //               <X className="h-5 w-5" />
+  //             </Button>
+  //           </div>
+  //         )}
+  //       </div>
+  //     )}
+
+  //     {/* Submit */}
+  //     <Button
+  //       type="submit"
+  //       disabled={
+  //         !videoSrc ||
+  //         !(audioSource === "file" ? referenceAudio : recordedAudio) ||
+  //         isLoading ||
+  //         isProcessing
+  //       }
+  //       className="w-full"
+  //     >
+  //       {isProcessing ? "Processing..." : "Process Video"}
+  //     </Button>
+
+  //     {/* Validation/Error Alerts */}
+  //     {/* {(errors.youtubeUrl ||
+  //       errors.videoFile ||
+  //       errors.referenceAudio) && (
+  //       <Alert variant="destructive">
+  //         <AlertCircle className="h-4 w-4" />
+  //         <AlertTitle>Error</AlertTitle>
+  //         <AlertDescription>
+  //           {errors.youtubeUrl?.message ||
+  //             errors.videoFile?.message ||
+  //             errors.referenceAudio?.message}
+  //         </AlertDescription>
+  //       </Alert>
+  //     )} */}
+
+  //     {error && (
+  //       <Alert variant="destructive" className="mt-2">
+  //         <AlertCircle className="h-4 w-4" />
+  //         <AlertTitle>Error</AlertTitle>
+  //         <AlertDescription>{error}</AlertDescription>
+  //       </Alert>
+  //     )}
+  //   </div>
+  // </form>
   return (
     <div className="container mx-auto max-w-3xl p-6 space-y-6">
       <h3 className="text-center text-3xl font-bold">SNIPCLIPS</h3>
@@ -227,196 +567,309 @@ export default function VideoProcessor() {
             the speaker's matched segments.
           </p>
         </CardHeader>
-
-        <CardContent>
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-            {/* YouTube URL */}
-            <div className="space-y-1">
-              <Label htmlFor="youtube-url" className="flex items-center gap-2">
-                <Youtube className="h-5 w-5 text-gray-500" />
-                YouTube URL
-                <span className="text-xs text-gray-400">(Coming soon)</span>
-              </Label>
-              <Controller
-                name="youtubeUrl"
-                control={control}
-                render={({ field }) => (
-                  <Input
-                    id="youtube-url"
-                    type="url"
-                    disabled
-                    placeholder="https://www.youtube.com/watch?v=..."
-                    {...field}
-                    onChange={(e) => {
-                      field.onChange(e);
-                      setValue("videoFile", undefined);
-                    }}
-                  />
-                )}
-              />
-              <p className="text-sm text-muted-foreground">
-                Enter a YouTube video URL to process.
-              </p>
-            </div>
-
-            {/* Upload Video */}
-            <div className="space-y-1">
-              <Label htmlFor="video-file" className="flex items-center gap-2">
-                <Upload className="h-5 w-5 text-gray-500" />
-                Upload Video File
-              </Label>
-              <Controller
-                name="videoFile"
-                control={control}
-                render={({ field: { value, onChange, ...field } }) => (
-                  <Input
-                    id="video-file"
-                    type="file"
-                    accept="video/*"
-                    onChange={(e) => {
-                      onChange(e.target.files?.[0]);
-                      setValue("youtubeUrl", "");
-                    }}
-                    {...field}
-                  />
-                )}
-              />
-              <p className="text-sm text-muted-foreground">
-                Upload a video file from your device.
-              </p>
-            </div>
-
-            {/* Video Preview */}
-            {videoSrc && (
-              <div className="mt-3">
-                <Player key={videoSrc} src={videoSrc} />
-              </div>
-            )}
-
-            {/* Reference Audio Option */}
+        <Form {...form}>
+          <form onSubmit={handleSubmit(onSubmit)} className="space-y-8 p-6">
             <div className="space-y-2">
-              <Label className="block">Reference Audio</Label>
-              <Controller
-                name="audioSource"
-                control={control}
-                render={({ field: { onChange, value } }) => (
-                  <RadioGroup
-                    value={value}
-                    onValueChange={(val: "file" | "record") => {
-                      onChange(val);
-                      setValue("referenceAudio", undefined);
-                      setRecordedAudio(null);
-                    }}
-                  >
-                    <div className="flex items-center gap-2">
-                      <RadioGroupItem value="file" id="audio-file" />
-                      <Label htmlFor="audio-file">Upload Audio File</Label>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <RadioGroupItem value="record" id="audio-record" />
-                      <Label htmlFor="audio-record">Record Audio</Label>
-                    </div>
-                  </RadioGroup>
+              <FormField
+                disabled={!!watch("videoFile")}
+                name="youtubeUrl"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel
+                      htmlFor="youtube-url"
+                      className="flex items-center gap-2"
+                    >
+                      <Youtube className="h-5 w-5 text-gray-500" />
+                      YouTube URL
+                    </FormLabel>
+                    <FormControl>
+                      <Input
+                        id="youtube-url"
+                        type="url"
+                        placeholder="https://www.youtube.com/watch?v=..."
+                        {...field}
+                        onChange={(e) => {
+                          field.onChange(e);
+                          setValue("videoFile", undefined);
+                        }}
+                      />
+                    </FormControl>
+                    {/* <p className="text-sm text-muted-foreground">
+                      Enter a YouTube video URL to process.
+                    </p> */}
+                    <FormMessage />
+                  </FormItem>
                 )}
               />
-            </div>
 
-            {/* Upload Audio */}
-            {audioSource === "file" && (
-              <div className="space-y-1">
-                <Label htmlFor="reference-audio">Upload Reference Audio</Label>
-                <Controller
+              <div className="my-3 flex justify-center">
+                <p className="text-gray-500 font-semibold">----- Or -----</p>
+              </div>
+
+              <FormField
+                disabled={!!watch("youtubeUrl")}
+                name="videoFile"
+                render={({ field: { value, onChange, ...field } }) => (
+                  <FormItem>
+                    <FormLabel
+                      htmlFor="video-file"
+                      className="flex items-center gap-2"
+                    >
+                      <Upload className="h-5 w-5 text-gray-500" />
+                      Upload Video File
+                    </FormLabel>
+                    <FormControl>
+                      <FileUpload
+                        onValueChange={(files) => {
+                          console.log("files", files);
+                          if (files) {
+                            form.setValue("videoFile", files[0]);
+                          }
+                        }}
+                        accept={ALLOWED_VIDEO_EXTENSIONS.map(
+                          (ext) => `video/${ext}`
+                        ).join(", ")}
+                        maxFiles={1}
+                        maxSize={MAX_FILE_SIZE * 1024 * 1024}
+                        onFileReject={(_, message) => {
+                          setFormError("videoFile", { message });
+                        }}
+                        {...field}
+                      >
+                        <FileUploadDropzone>
+                          <div className="flex flex-col items-center gap-1 text-center">
+                            <div className="flex items-center justify-center rounded-full border p-2.5">
+                              <Upload className="size-6 text-muted-foreground" />
+                            </div>
+                            <p className="font-medium text-sm">
+                              Drag & drop video file here
+                            </p>
+                            <p className="text-muted-foreground text-xs">
+                              Or click to browse (max 1 file, up to{" "}
+                              {MAX_FILE_SIZE}MB)
+                            </p>
+                          </div>
+                          <FileUploadTrigger asChild>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="mt-2 w-fit"
+                            >
+                              Browse file
+                            </Button>
+                          </FileUploadTrigger>
+                        </FileUploadDropzone>
+                        <FileUploadList>
+                          {value && (
+                            <FileUploadItem value={value}>
+                              <FileUploadItemPreview />
+                              <FileUploadItemMetadata />
+                              <FileUploadItemDelete asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="size-7"
+                                >
+                                  <X />
+                                  <span className="sr-only">Delete</span>
+                                </Button>
+                              </FileUploadItemDelete>
+                            </FileUploadItem>
+                          )}
+                        </FileUploadList>
+                      </FileUpload>
+                    </FormControl>
+                    {/* <p className="text-sm text-muted-foreground">
+                      Upload a video file from your device.
+                    </p> */}
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              {videoSrc && !(errors.youtubeUrl || errors.videoFile) && (
+                <div className="mt-3">
+                  <Player key={videoSrc} src={videoSrc} />
+                </div>
+              )}
+            </div>
+            <div className="space-y-6">
+              {/* Audio Source */}
+              <FormField
+                name="audioSource"
+                render={({ field: { value, onChange } }) => (
+                  <FormItem>
+                    <FormLabel className="block">Reference Audio</FormLabel>
+                    <FormControl>
+                      <RadioGroup
+                        value={value}
+                        onValueChange={(val: "file" | "record") => {
+                          onChange(val);
+                          setValue("referenceAudio", undefined);
+                          setRecordedAudio(null);
+                        }}
+                      >
+                        <div className="flex items-center gap-2">
+                          <RadioGroupItem value="file" id="audio-file" />
+                          <Label htmlFor="audio-file">Upload Audio File</Label>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <RadioGroupItem value="record" id="audio-record" />
+                          <Label htmlFor="audio-record">Record Audio</Label>
+                        </div>
+                      </RadioGroup>
+                    </FormControl>
+                  </FormItem>
+                )}
+              />
+
+              {/* Upload Audio File */}
+              {audioSource === "file" && (
+                <FormField
                   name="referenceAudio"
-                  control={control}
                   render={({ field: { value, onChange, ...field } }) => (
-                    <Input
-                      id="reference-audio"
-                      type="file"
-                      accept="audio/*"
-                      onChange={(e) => onChange(e.target.files?.[0])}
-                      aria-describedby="reference-audio-description"
-                      {...field}
-                    />
+                    <FormItem>
+                      <FormLabel htmlFor="reference-audio">
+                        Upload Reference Audio
+                      </FormLabel>
+                      <FormControl>
+                        {/* <Input
+                          id="reference-audio"
+                          type="file"
+                          accept="audio/*"
+                          onChange={(e) => onChange(e.target.files?.[0])}
+                          aria-describedby="reference-audio-description"
+                          {...field}
+                        /> */}
+                        <FileUpload
+                          aria-describedby="reference-audio-description"
+                          onValueChange={(files) => {
+                            console.log("files", files);
+                            if (files) {
+                              form.setValue("referenceAudio", files[0]);
+                            }
+                          }}
+                          accept={ALLOWED_AUDIO_EXTENSIONS.map(
+                            (ext) => `audio/${ext}`
+                          ).join(", ")}
+                          maxFiles={1}
+                          maxSize={MAX_FILE_SIZE * 1024 * 1024}
+                          onFileReject={(_, message) => {
+                            setFormError("referenceAudio", { message });
+                          }}
+                          {...field}
+                        >
+                          <FileUploadDropzone>
+                            <div className="flex flex-col items-center gap-1 text-center">
+                              <div className="flex items-center justify-center rounded-full border p-2.5">
+                                <Upload className="size-6 text-muted-foreground" />
+                              </div>
+                              <p className="font-medium text-sm">
+                                Drag & drop audio file here
+                              </p>
+                              <p className="text-muted-foreground text-xs">
+                                Or click to browse (max 1 file, up to{" "}
+                                {MAX_FILE_SIZE}MB)
+                              </p>
+                            </div>
+                            <FileUploadTrigger asChild>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="mt-2 w-fit"
+                              >
+                                Browse file
+                              </Button>
+                            </FileUploadTrigger>
+                          </FileUploadDropzone>
+                          <FileUploadList>
+                            {value && (
+                              <FileUploadItem value={value}>
+                                <FileUploadItemPreview />
+                                <FileUploadItemMetadata />
+                                <FileUploadItemDelete asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="size-7"
+                                  >
+                                    <X />
+                                    <span className="sr-only">Delete</span>
+                                  </Button>
+                                </FileUploadItemDelete>
+                              </FileUploadItem>
+                            )}
+                          </FileUploadList>
+                        </FileUpload>
+                      </FormControl>
+                      <p className="text-sm text-muted-foreground">
+                        Upload a reference audio file for speaker matching.
+                      </p>
+                      {audioSrc && (
+                        <div className="mt-3">
+                          <Player type="audio" key={audioSrc} src={audioSrc} />
+                        </div>
+                      )}
+                      <FormMessage />
+                    </FormItem>
                   )}
                 />
+              )}
 
-                <p className="text-sm text-muted-foreground">
-                  Upload a reference audio file for speaker matching.
-                </p>
-                {audioSrc && (
-                  <div className="mt-3">
-                    <Player type="audio" key={audioSrc} src={audioSrc} />
-                  </div>
-                )}
-              </div>
-            )}
+              {/* Record Audio */}
+              {audioSource === "record" && (
+                <div className="space-y-3">
+                  <AudioRecorder
+                    onRecordingComplete={addAudioElement}
+                    audioTrackConstraints={{
+                      noiseSuppression: true,
+                      echoCancellation: true,
+                    }}
+                    showVisualizer
+                    downloadOnSavePress={false}
+                    downloadFileExtension="mp3"
+                  />
+                  {recordedAudio && (
+                    <div className="flex items-center gap-3">
+                      <audio src={recordedAudio} controls className="w-64" />
+                      <Button
+                        size="icon"
+                        variant="outline"
+                        onClick={() => setRecordedAudio(null)}
+                      >
+                        <X className="h-5 w-5" />
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
 
-            {/* Record Audio */}
-            {audioSource === "record" && (
-              <div className="space-y-3">
-                <AudioRecorder
-                  onRecordingComplete={addAudioElement}
-                  audioTrackConstraints={{
-                    noiseSuppression: true,
-                    echoCancellation: true,
-                  }}
-                  showVisualizer
-                  downloadOnSavePress={false}
-                  downloadFileExtension="mp3"
-                />
-                {recordedAudio && (
-                  <div className="flex items-center gap-3">
-                    <audio src={recordedAudio} controls className="w-64" />
-                    <Button
-                      size="icon"
-                      variant="outline"
-                      onClick={() => setRecordedAudio(null)}
-                    >
-                      <X className="h-5 w-5" />
-                    </Button>
-                  </div>
-                )}
-              </div>
-            )}
+              {/* Submit */}
+              <Button
+                type="submit"
+                disabled={
+                  !videoSrc ||
+                  !(audioSource === "file" ? referenceAudio : recordedAudio) ||
+                  isLoading ||
+                  isProcessing
+                }
+                className="w-full"
+              >
+                {isProcessing ? "Processing..." : "Process Video"}
+              </Button>
 
-            {/* Submit */}
-            <Button
-              type="submit"
-              disabled={
-                !videoSrc ||
-                !(audioSource === "file" ? referenceAudio : recordedAudio) ||
-                isLoading ||
-                isProcessing
-              }
-              className="w-full"
-            >
-              {isProcessing ? "Processing..." : "Process Video"}
-            </Button>
-
-            {/* Validation/Error Alerts */}
-            {(errors.youtubeUrl ||
-              errors.videoFile ||
-              errors.referenceAudio) && (
-              <Alert variant="destructive">
-                <AlertCircle className="h-4 w-4" />
-                <AlertTitle>Error</AlertTitle>
-                <AlertDescription>
-                  {errors.youtubeUrl?.message ||
-                    errors.videoFile?.message ||
-                    errors.referenceAudio?.message}
-                </AlertDescription>
-              </Alert>
-            )}
-
-            {error && (
-              <Alert variant="destructive">
-                <AlertCircle className="h-4 w-4" />
-                <AlertTitle>Error</AlertTitle>
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            )}
+              {error && (
+                <Alert variant="destructive" className="mt-2">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertTitle>Error</AlertTitle>
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              )}
+            </div>
           </form>
+        </Form>
 
+        <CardContent>
           {/* Processing Progress */}
           {/* {isProcessing && (
             <div className="mt-6 space-y-1">

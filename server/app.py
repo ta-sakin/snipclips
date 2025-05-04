@@ -35,8 +35,7 @@ AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY")
 AWS_SECRET_KEY = os.getenv("AWS_SECRET_KEY")
 AWS_REGION = os.getenv("AWS_REGION")
 HF_TOKEN = os.getenv("HF_TOKEN")
-MAX_CONTENT_LENGTH = 500 * 1024 * 1024  # 500MB max file size
-
+MAX_CONTENT_LENGTH = 20 * 1024 * 1024  # 500MB max file size
 # Initialize S3 client
 s3_client = boto3.client(
     's3',
@@ -81,41 +80,26 @@ def upload_to_s3(file_path, bucket, object_name=None):
 
 
 def download_youtube_video(youtube_link, output_path):
-    # Extract base filename without extension
     output_base = os.path.splitext(output_path)[0]
+    actual_output = output_base + '.mp4'
+    error = {
+        "msg": None
+    }
 
-    # Define the yt-dlp command with the necessary options
-    command = [
-        'yt-dlp',
-        '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4',
-        youtube_link,
-        '--username', 'oauth2',
-        '--password', '',
-        '--output', f'{output_base}.mp4'
-    ]
+    def yt_filesize_filter(info_dict):
+        size = info_dict.get('filesize') or info_dict.get('filesize_approx', 0)
+        if size > MAX_CONTENT_LENGTH:
+            error['msg'] = "Failed to process Youtube video. Youtube video size is too large"
+        return error['msg']
+    ydl_opts = {
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4',
+        'outtmpl': actual_output,
+        'match_filter': yt_filesize_filter,
+    }
 
-    # Execute the command
-    try:
-        result = subprocess.run(command, check=True,
-                                capture_output=True, text=True)
-        print("Download successful:", result.stdout)
-        return f"{output_base}.mp4"  # Path to the downloaded video
-
-    except subprocess.CalledProcessError as e:
-        print("An error occurred:", e.stderr)
-        return None
-# def download_youtube_video(youtube_link, output_path):
-#     output_base = os.path.splitext(output_path)[0]
-
-#     ydl_opts = {
-#         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4',
-#         'outtmpl': output_base + '.mp4',
-#     }
-
-#     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-#         ydl.download([youtube_link])
-#     actual_output = output_base + '.mp4'
-#     return actual_output
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([youtube_link])
+    return actual_output, error['msg']
 
 
 def extract_audio_from_video(video_path, audio_path):
@@ -209,15 +193,17 @@ def validate_inputs(request):
     reference_audio = request.files.get('reference_audio')
 
     # Check if reference audio is provided and valid
-    if not reference_audio or not allowed_audio_file(reference_audio.filename):
-        return None, 'No reference audio file or invalid format'
+    if not reference_audio:
+        return None, 'No reference audio file'
+    if not allowed_audio_file(reference_audio.filename):
+        return None, 'Invalid audio file format'
 
     # Check if either YouTube URL or video file is provided (but not both)
     if youtube_url and video_file:
         return None, 'Please provide either YouTube URL or video file, not both'
 
     if not youtube_url and not video_file:
-        return None, 'Please provide either YouTube URL or video file'
+        return None, 'Please provide either YouTube URL or a video file'
 
     if video_file and not allowed_video_file(video_file.filename):
         return None, 'Invalid video file format'
@@ -270,10 +256,11 @@ def process_video():
 
             # Process video based on input type
             if inputs['youtube_url']:
-                original_video_path = download_youtube_video(
+                actual_output, error = download_youtube_video(
                     inputs['youtube_url'], original_video_path)
-                if not original_video_path:
-                    return jsonify({'error': 'Failed to download YouTube video'}), 500
+                original_video_path = actual_output
+                if not original_video_path or error:
+                    return jsonify({'error': error}), 500
             else:
                 # Save and process uploaded video file
                 video_file = inputs['video_file']
@@ -388,87 +375,6 @@ def process_video():
             video.close()
         if 'final_video' in locals():
             final_video.close()
-# @app.route('/process_video', methods=['POST'])
-# def process_video():
-#     try:
-#         # Validate inputs
-#         inputs, error = validate_inputs(request)
-#         if error:
-#             return jsonify({'error': error}), 400
-
-#         # Create temporary directory for processing
-#         with tempfile.TemporaryDirectory() as temp_dir:
-#             # Save paths
-#             video_path = os.path.join(temp_dir, 'video.mp4')
-#             audio_path = os.path.join(temp_dir, 'audio.wav')
-#             reference_path = os.path.join(
-#                 temp_dir, secure_filename(inputs['reference_audio'].filename))
-#             output_dir = os.path.join(temp_dir, 'extracted_speakers')
-#             output_video = os.path.join(temp_dir, f'output_{uuid.uuid4()}.mp4')
-
-#             os.makedirs(output_dir, exist_ok=True)
-#             inputs['reference_audio'].save(reference_path)
-
-#             # Process video based on input type
-#             if inputs['youtube_url']:
-#                 video_path = download_youtube_video(
-#                     inputs['youtube_url'], video_path)
-#             else:
-#                 # Save and process uploaded video file
-#                 video_file = inputs['video_file']
-#                 video_file_path = os.path.join(
-#                     temp_dir, secure_filename(video_file.filename))
-#                 video_file.save(video_file_path)
-#                 # Convert video to standard format if needed
-#                 command = f"ffmpeg -i {video_file_path} -c:v libx264 -c:a aac {video_path} -y"
-#                 subprocess.call(command, shell=True)
-#                 os.remove(video_file_path)  # Clean up original video file
-
-#             # Extract audio from video
-#             audio_path = extract_audio_from_video(video_path, audio_path)
-
-#             # Perform diarization
-#             pipeline = Pipeline.from_pretrained(
-#                 "pyannote/speaker-diarization", use_auth_token=HF_TOKEN)
-#             diarization_result = pipeline(audio_path)
-
-#             # Extract and match speakers
-#             extract_speaker_segments(
-#                 audio_path, diarization_result, output_dir)
-#             matching_speakers, distances = match_speakers(
-#                 reference_path, output_dir)
-
-#             if not matching_speakers:
-#                 return jsonify({'error': 'No matching speakers found'}), 404
-
-#             # Generate and upload final video
-#             extract_matching_speaker_segments(
-#                 video_path,
-#                 diarization_result,
-#                 matching_speakers,
-#                 output_video
-#             )
-#             print("uploading to s3 " +
-#                   f'processed_videos/{os.path.basename(output_video)}')
-#             # Upload to S3
-#             s3_url = upload_to_s3(
-#                 output_video,
-#                 S3_BUCKET_NAME,
-#                 f'processed_videos/{os.path.basename(output_video)}'
-#             )
-
-#             if not s3_url:
-#                 return jsonify({'error': 'Failed to upload to S3'}), 500
-
-#             return jsonify({
-#                 'status': 'success',
-#                 'video_url': s3_url,
-#                 'matching_speakers': list(matching_speakers),
-#                 'speaker_distances': distances
-#             })
-
-#     except Exception as e:
-#         return jsonify({'error': str(e)}), 500
 
 
 def generate_video_stream(video_path):
