@@ -19,14 +19,13 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 import time
 from functools import wraps
-
+from install_ffmpeg import (install_ffmpeg)
 # Load .env file
 load_dotenv()
 app = Flask(__name__)
 CORS(app)
 app.config["REDIS_URL"] = "redis://localhost"
 app.register_blueprint(sse, url_prefix='/stream')
-
 # Configuration
 ALLOWED_AUDIO_EXTENSIONS = {'wav', 'mp3'}
 ALLOWED_VIDEO_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv'}
@@ -35,7 +34,7 @@ AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY")
 AWS_SECRET_KEY = os.getenv("AWS_SECRET_KEY")
 AWS_REGION = os.getenv("AWS_REGION")
 HF_TOKEN = os.getenv("HF_TOKEN")
-MAX_CONTENT_LENGTH = 20 * 1024 * 1024  # 500MB max file size
+MAX_CONTENT_LENGTH = 20 * 1024 * 1024  # 20MB max file size
 # Initialize S3 client
 s3_client = boto3.client(
     's3',
@@ -43,6 +42,7 @@ s3_client = boto3.client(
     aws_secret_access_key=AWS_SECRET_KEY,
     region_name=AWS_REGION
 )
+install_ffmpeg()
 
 
 def timer(func):

@@ -249,7 +249,7 @@ export default function VideoProcessor() {
         formData.append("reference_audio", blob, "recorded_audio.wav");
       }
 
-      const response = await fetch("http://127.0.0.1:5000/process_video", {
+      const response = await fetch("http://127.0.0.1:8000/process_video", {
         method: "POST",
         body: formData,
       });
