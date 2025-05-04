@@ -1,7 +1,7 @@
 "use client";
 import "@vidstack/react/player/styles/base.css";
 import { AudioRecorder } from "react-audio-voice-recorder";
-import { CloudUpload, X } from "lucide-react";
+import { CloudUpload, Download, X } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -894,6 +894,15 @@ export default function VideoProcessor() {
               </CardHeader>
               <CardContent>
                 <Player src={result?.video_url} />
+                <div className="mt-4 flex justify-end">
+                  <a
+                    href={result?.video_url}
+                    download
+                    className="flex items-center gap-2 bg-primary text-primary-foreground hover:bg-primary/90 px-4 py-2 rounded-md text-sm"
+                  >
+                    <Download size={16} /> Download
+                  </a>
+                </div>
               </CardContent>
             </Card>
           )}

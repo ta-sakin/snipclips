@@ -309,6 +309,46 @@ def process_video():
                     diarization_result.itertracks(yield_label=True)
                 ))
 
+            # # Match speakers
+            # matching_speakers, distances = match_speakers(
+            #     reference_path, output_dir)
+
+            # if not matching_speakers:
+            #     return jsonify({'error': 'No matching speakers found'}), 404
+
+            # # Generate final video with parallel processing
+            # video = VideoFileClip(video_path)
+
+            # def process_segment(turn):
+            #     speech_turn, _, speaker_label = turn
+            #     if speaker_label in matching_speakers:
+            #         return video.subclip(speech_turn.start, speech_turn.end)
+            #     return None
+
+            # with ThreadPoolExecutor() as executor:
+            #     segments = list(filter(None, executor.map(
+            #         process_segment,
+            #         diarization_result.itertracks(yield_label=True)
+            #     )))
+
+            # if not segments:
+            #     video.close()
+            #     return jsonify({'error': 'No segments found for matching speakers'}), 404
+
+            # final_video = concatenate_videoclips(segments)
+            # final_video.write_videofile(
+            #     output_video,
+            #     codec='libx264',
+            #     audio_codec='aac',
+            #     preset='ultrafast',
+            #     threads=8,
+            #     temp_audiofile='temp-audio.m4a',
+            #     remove_temp=True
+            # )
+
+            # video.close()
+            # final_video.close()
+
             # Match speakers
             matching_speakers, distances = match_speakers(
                 reference_path, output_dir)
@@ -317,39 +357,54 @@ def process_video():
                 return jsonify({'error': 'No matching speakers found'}), 404
 
             # Generate final video with parallel processing
-            video = VideoFileClip(video_path)
+            try:
+                video = VideoFileClip(video_path)
 
-            def process_segment(turn):
-                speech_turn, _, speaker_label = turn
-                if speaker_label in matching_speakers:
-                    return video.subclip(speech_turn.start, speech_turn.end)
-                return None
+                segments = []
+                # Process segments sequentially instead of using ThreadPoolExecutor
+                for speech_turn, _, speaker_label in diarization_result.itertracks(yield_label=True):
+                    if speaker_label in matching_speakers:
+                        try:
+                            segment = video.subclip(
+                                speech_turn.start, speech_turn.end)
+                            segments.append(segment)
+                        except Exception as e:
+                            print(f"Error processing segment: {e}")
+                            continue
 
-            with ThreadPoolExecutor() as executor:
-                segments = list(filter(None, executor.map(
-                    process_segment,
-                    diarization_result.itertracks(yield_label=True)
-                )))
+                if not segments:
+                    video.close()
+                    return jsonify({'error': 'No segments found for matching speakers'}), 404
 
-            if not segments:
+                final_video = concatenate_videoclips(segments)
+                final_video.write_videofile(
+                    output_video,
+                    codec='libx264',
+                    audio_codec='aac',
+                    preset='ultrafast',
+                    threads=4,  # Reduced from 8 to 4 for better stability
+                    temp_audiofile='temp-audio.m4a',
+                    remove_temp=True
+                )
+
+                # Make sure to close video objects
+                for segment in segments:
+                    segment.close()
                 video.close()
-                return jsonify({'error': 'No segments found for matching speakers'}), 404
+                final_video.close()
 
-            final_video = concatenate_videoclips(segments)
-            final_video.write_videofile(
-                output_video,
-                codec='libx264',
-                audio_codec='aac',
-                preset='ultrafast',
-                threads=8,
-                temp_audiofile='temp-audio.m4a',
-                remove_temp=True
-            )
-
-            video.close()
-            final_video.close()
-
-            # Upload to S3
+            except Exception as e:
+                print(f"Error during video processing: {e}")
+                # Clean up resources if they exist
+                if 'video' in locals():
+                    video.close()
+                if 'final_video' in locals():
+                    final_video.close()
+                if 'segments' in locals():
+                    for segment in segments:
+                        segment.close()
+                raise
+                # Upload to S3
             s3_url = upload_to_s3(
                 output_video,
                 S3_BUCKET_NAME,
